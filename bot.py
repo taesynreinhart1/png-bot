@@ -6,6 +6,9 @@ import json
 import os
 import math
 from datetime import datetime
+from flask import Flask
+import threading
+import os
 
 # ---------------- CONFIG ----------------
 PYTHON_VERSION = "3.11"
@@ -166,6 +169,20 @@ async def resetmonth(interaction: discord.Interaction, month: str = None):
         await interaction.response.send_message(f"⚠️ Reset all data for {month_key}.")
     else:
         await interaction.response.send_message(f"No data found for {month_key}.")
+
+
+app = Flask("")
+
+@app.route("/")
+def home():
+    return "PNG Leaderboard Bot is alive!"
+
+def run_flask():
+    port = int(os.environ.get("PORT", 3000))  # Render sets PORT automatically
+    app.run(host="0.0.0.0", port=port)
+
+# Start Flask server in a separate thread so bot can run simultaneously
+threading.Thread(target=run_flask).start()
 
 # ---------------- RUN BOT ----------------
 bot.run(TOKEN)
