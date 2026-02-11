@@ -51,6 +51,35 @@ async def on_ready():
     except Exception as e:
         print(f"Failed to sync commands: {e}")
 
+@bot.tree.command(name="ping", description="Check bot latency and hype!", guild=guild)
+async def ping(interaction: discord.Interaction):
+    latency_ms = round(bot.latency * 1000)  # convert to milliseconds
+    hype_messages = [
+        "PNGGGG🗣️🗣️🔥🔥",
+        "LET'S GO PNGGGG 🚀🗣️🔥",
+        "PNGG MODE ACTIVATED 🏆💥🗣️",
+        "KILLS TRACKED! PNGGGG 💯🔥🗣️"
+    ]
+    import random
+    hype = random.choice(hype_messages)
+
+    await interaction.response.send_message(f"🏓 Pong! {latency_ms}ms\n{hype}")
+@bot.tree.command(name="help", description="Show bot commands and info", guild=guild)
+async def help_command(interaction: discord.Interaction):
+    help_text = (
+        "📜 **PNG Leaderboard Bot Commands** 📜\n\n"
+        "🔹 `/addkills player:<name> regular:<num> team:<num> month:<YYYY-MM>` — Add kills for a player (Authorized only)\n"
+        "🔹 `/leaderboard month:<YYYY-MM>` — Show top players for a month (default = current month)\n"
+        "🔹 `/player player:<name> month:<YYYY-MM>` — Show kills for a specific player\n"
+        "🔹 `/resetmonth month:<YYYY-MM>` — Reset all kills for a month (Authorized only)\n"
+        "🔹 `/ping` — Check bot latency and hype!\n"
+        "🔹 `/help` — Show this help message\n\n"
+        "⚠️ **Note:** Only authorized users can add or reset kills.\n"
+        "Current month defaults to your server's time if not specified."
+    )
+
+    await interaction.response.send_message(help_text)
+
 # Add kills (backend only)
 @bot.tree.command(name="addkills", description="Add kills for a player (Authorized only)", guild=guild)
 @app_commands.describe(player="Player ID or name", regular="Regular kills", team="Team kills", month="Month YYYY-MM")
