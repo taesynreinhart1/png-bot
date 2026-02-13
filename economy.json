@@ -1,9 +1,9 @@
 {
     "users": {
         "1035911200237699072": {
-            "balance": 700,
+            "balance": 675,
             "total_won": 0,
-            "total_lost": 0,
+            "total_lost": 25,
             "last_daily": 1770967498
         }
     }
