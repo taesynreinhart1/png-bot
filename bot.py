@@ -9,6 +9,17 @@ from datetime import datetime
 from flask import Flask
 import threading
 import os
+import time
+import random
+
+
+ECON_FILE = "economy.json"
+START_BALANCE = 500
+MIN_BET = 10
+MAX_BET = 1000
+DAILY_REWARD = 200
+DAILY_COOLDOWN = 86400  # 24 hours
+
 
 # ---------------- CONFIG ----------------
 PYTHON_VERSION = "3.11"
@@ -39,10 +50,317 @@ def get_month_key(month: str = None):
 def is_authorized(user_id):
     return user_id in AUTHORIZED_USERS
 
+# ================= PNG CASINO SYSTEM =================
+
+def save_economy(data):
+    with open(ECON_FILE, "w") as f:
+        json.dump(data, f, indent=4)
+
+def get_account(user_id):
+    data = load_economy()
+    user_id = str(user_id)
+
+    if user_id not in data["users"]:
+        data["users"][user_id] = {
+            "balance": START_BALANCE,
+            "total_won": 0,
+            "total_lost": 0,
+            "last_daily": 0
+        }
+        save_economy(data)
+
+    return data, data["users"][user_id]
+
 # ---------------- BOT SETUP ----------------
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 guild = discord.Object(id=GUILD_ID)
+
+# ================= BALANCE =================
+
+@bot.tree.command(name="balance", description="Check your PNG balance", guild=guild)
+async def balance(interaction: discord.Interaction):
+    data, account = get_account(interaction.user.id)
+
+    embed = discord.Embed(title="🪙 PNG Balance", color=discord.Color.gold())
+    embed.add_field(name="User", value=interaction.user.mention)
+    embed.add_field(name="Balance", value=f"{account['balance']} PNG")
+
+    await interaction.response.send_message(embed=embed)
+
+# ================= DAILY =================
+
+@bot.tree.command(name="daily", description="Claim daily PNG coins", guild=guild)
+async def daily(interaction: discord.Interaction):
+    data, account = get_account(interaction.user.id)
+    now = int(time.time())
+
+    if now - account["last_daily"] < DAILY_COOLDOWN:
+        remaining = DAILY_COOLDOWN - (now - account["last_daily"])
+        hours = remaining // 3600
+        await interaction.response.send_message(
+            f"⏳ Come back in {hours}h.",
+            ephemeral=True
+        )
+        return
+
+    account["balance"] += DAILY_REWARD
+    account["last_daily"] = now
+    save_economy(data)
+
+    await interaction.response.send_message(
+        f"🎁 You received {DAILY_REWARD} PNG!"
+    )
+
+# ================= COINFLIP =================
+
+@bot.tree.command(name="coinflip", description="Bet on heads or tails", guild=guild)
+@app_commands.describe(bet="Amount to bet", choice="heads or tails")
+async def coinflip(interaction: discord.Interaction, bet: int, choice: str):
+    choice = choice.lower()
+
+    if choice not in ["heads", "tails"]:
+        await interaction.response.send_message("Choose heads or tails.", ephemeral=True)
+        return
+
+    if bet < MIN_BET or bet > MAX_BET:
+        await interaction.response.send_message("Invalid bet amount.", ephemeral=True)
+        return
+
+    data, account = get_account(interaction.user.id)
+
+    if account["balance"] < bet:
+        await interaction.response.send_message("Not enough balance.", ephemeral=True)
+        return
+
+    result = random.choice(["heads", "tails"])
+
+    embed = discord.Embed(title="🪙 Coinflip", color=discord.Color.blue())
+    embed.add_field(name="Your Choice", value=choice)
+    embed.add_field(name="Result", value=result)
+
+    if choice == result:
+        account["balance"] += bet
+        account["total_won"] += bet
+        embed.add_field(name="Outcome", value=f"You won {bet} PNG!")
+    else:
+        account["balance"] -= bet
+        account["total_lost"] += bet
+        embed.add_field(name="Outcome", value=f"You lost {bet} PNG.")
+
+    save_economy(data)
+    await interaction.response.send_message(embed=embed)
+
+# ================= DICE (VS BOT) =================
+
+@bot.tree.command(name="dice", description="Roll against the bot", guild=guild)
+@app_commands.describe(bet="Amount to bet")
+async def dice(interaction: discord.Interaction, bet: int):
+    if bet < MIN_BET or bet > MAX_BET:
+        await interaction.response.send_message("Invalid bet.", ephemeral=True)
+        return
+
+    data, account = get_account(interaction.user.id)
+
+    if account["balance"] < bet:
+        await interaction.response.send_message("Not enough balance.", ephemeral=True)
+        return
+
+    user_roll = random.randint(1, 6)
+    bot_roll = random.randint(1, 6)
+
+    embed = discord.Embed(title="🎲 Dice Game", color=discord.Color.purple())
+    embed.add_field(name="You rolled", value=user_roll)
+    embed.add_field(name="Bot rolled", value=bot_roll)
+
+    if user_roll > bot_roll:
+        account["balance"] += bet
+        account["total_won"] += bet
+        embed.add_field(name="Outcome", value=f"You won {bet} PNG!")
+    elif user_roll < bot_roll:
+        account["balance"] -= bet
+        account["total_lost"] += bet
+        embed.add_field(name="Outcome", value=f"You lost {bet} PNG.")
+    else:
+        embed.add_field(name="Outcome", value="Tie! No coins lost.")
+
+    save_economy(data)
+    await interaction.response.send_message(embed=embed)
+
+# ================= DICE VS PLAYER =================
+
+@bot.tree.command(name="dicevs", description="Challenge another user to a dice duel", guild=guild)
+@app_commands.describe(
+    opponent="User to challenge",
+    bet="Amount each player bets"
+)
+async def dicevs(interaction: discord.Interaction, opponent: discord.Member, bet: int):
+
+    if opponent.bot:
+        await interaction.response.send_message("You cannot challenge a bot.", ephemeral=True)
+        return
+
+    if opponent.id == interaction.user.id:
+        await interaction.response.send_message("You cannot challenge yourself.", ephemeral=True)
+        return
+
+    if bet < MIN_BET or bet > MAX_BET:
+        await interaction.response.send_message("Invalid bet amount.", ephemeral=True)
+        return
+
+    data = load_economy()
+    challenger_data, challenger_account = get_account(interaction.user.id)
+    opponent_data, opponent_account = get_account(opponent.id)
+
+    if challenger_account["balance"] < bet:
+        await interaction.response.send_message("You don't have enough balance.", ephemeral=True)
+        return
+
+    if opponent_account["balance"] < bet:
+        await interaction.response.send_message("Opponent doesn't have enough balance.", ephemeral=True)
+        return
+
+    # Roll dice
+    challenger_roll = random.randint(1, 6)
+    opponent_roll = random.randint(1, 6)
+
+    embed = discord.Embed(title="🎲 Dice Duel", color=discord.Color.dark_gold())
+    embed.add_field(name=interaction.user.display_name, value=f"Rolled: {challenger_roll}", inline=False)
+    embed.add_field(name=opponent.display_name, value=f"Rolled: {opponent_roll}", inline=False)
+
+    if challenger_roll > opponent_roll:
+        challenger_account["balance"] += bet
+        opponent_account["balance"] -= bet
+        challenger_account["total_won"] += bet
+        opponent_account["total_lost"] += bet
+        embed.add_field(name="Winner", value=interaction.user.mention)
+    elif opponent_roll > challenger_roll:
+        opponent_account["balance"] += bet
+        challenger_account["balance"] -= bet
+        opponent_account["total_won"] += bet
+        challenger_account["total_lost"] += bet
+        embed.add_field(name="Winner", value=opponent.mention)
+    else:
+        embed.add_field(name="Result", value="Tie! No coins exchanged.")
+
+    save_economy(load_economy())
+
+    await interaction.response.send_message(embed=embed)
+
+# ================= SLOTS =================
+
+@bot.tree.command(name="slots", description="Play PNG slots", guild=guild)
+@app_commands.describe(bet="Amount to bet")
+async def slots(interaction: discord.Interaction, bet: int):
+    if bet < MIN_BET or bet > MAX_BET:
+        await interaction.response.send_message("Invalid bet.", ephemeral=True)
+        return
+
+    data, account = get_account(interaction.user.id)
+
+    if account["balance"] < bet:
+        await interaction.response.send_message("Not enough balance.", ephemeral=True)
+        return
+
+    symbols = ["🍒", "🍋", "🔔", "💎", "7️⃣"]
+    result = [random.choice(symbols) for _ in range(3)]
+
+    embed = discord.Embed(title="🎰 PNG Slots", color=discord.Color.orange())
+    embed.add_field(name="Result", value=" | ".join(result))
+
+    if result.count(result[0]) == 3:
+        winnings = bet * 5
+        account["balance"] += winnings
+        account["total_won"] += winnings
+        embed.add_field(name="JACKPOT!", value=f"You won {winnings} PNG!")
+    elif len(set(result)) == 2:
+        winnings = bet * 2
+        account["balance"] += winnings
+        account["total_won"] += winnings
+        embed.add_field(name="Nice!", value=f"You won {winnings} PNG!")
+    else:
+        account["balance"] -= bet
+        account["total_lost"] += bet
+        embed.add_field(name="Outcome", value=f"You lost {bet} PNG.")
+
+    save_economy(data)
+    await interaction.response.send_message(embed=embed)
+
+# ================= ROULETTE =================
+
+@bot.tree.command(name="roulette", description="Play roulette", guild=guild)
+@app_commands.describe(bet="Amount to bet", choice="red, black, or number 0-36")
+async def roulette(interaction: discord.Interaction, bet: int, choice: str):
+    if bet < MIN_BET or bet > MAX_BET:
+        await interaction.response.send_message("Invalid bet.", ephemeral=True)
+        return
+
+    data, account = get_account(interaction.user.id)
+
+    if account["balance"] < bet:
+        await interaction.response.send_message("Not enough balance.", ephemeral=True)
+        return
+
+    number = random.randint(0, 36)
+    red_numbers = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
+    color = "red" if number in red_numbers else "black"
+    if number == 0:
+        color = "green"
+
+    embed = discord.Embed(title="🎡 PNG Roulette", color=discord.Color.red())
+    embed.add_field(name="Number", value=number)
+    embed.add_field(name="Color", value=color)
+
+    win = False
+    payout = 0
+
+    if choice.lower() in ["red", "black"] and choice.lower() == color:
+        win = True
+        payout = bet
+    elif choice.isdigit() and int(choice) == number:
+        win = True
+        payout = bet * 35
+
+    if win:
+        account["balance"] += payout
+        account["total_won"] += payout
+        embed.add_field(name="Outcome", value=f"You won {payout} PNG!")
+    else:
+        account["balance"] -= bet
+        account["total_lost"] += bet
+        embed.add_field(name="Outcome", value=f"You lost {bet} PNG.")
+
+    save_economy(data)
+    await interaction.response.send_message(embed=embed)
+
+# ================= LEADERBOARD =================
+
+@bot.tree.command(name="leaderboardcoins", description="Top richest players", guild=guild)
+async def leaderboardcoins(interaction: discord.Interaction):
+    data = load_economy()
+
+    if not data["users"]:
+        await interaction.response.send_message("No data yet.")
+        return
+
+    sorted_users = sorted(
+        data["users"].items(),
+        key=lambda x: x[1]["balance"],
+        reverse=True
+    )
+
+    embed = discord.Embed(title="🏆 PNG Rich List", color=discord.Color.gold())
+
+    for i, (user_id, info) in enumerate(sorted_users[:10], start=1):
+        embed.add_field(
+            name=f"{i}. <@{user_id}>",
+            value=f"{info['balance']} PNG",
+            inline=False
+        )
+
+    await interaction.response.send_message(embed=embed)
+
+# ================= END CASINO SYSTEM =================
 
 # ---------------- COMMANDS ----------------
 @bot.event
