@@ -11,6 +11,8 @@ import threading
 import os
 import time
 import random
+from discord.ui import View, Button, Modal, TextInput
+from discord.ext import tasks
 
 
 ECON_FILE = "economy.json"
@@ -124,6 +126,7 @@ async def daily(interaction: discord.Interaction):
 @bot.tree.command(name="coinflip", description="Bet on heads or tails", guild=guild)
 @app_commands.describe(bet="Amount to bet", choice="heads or tails")
 async def coinflip(interaction: discord.Interaction, bet: int, choice: str):
+
     choice = choice.lower()
 
     if choice not in ["heads", "tails"]:
@@ -140,7 +143,8 @@ async def coinflip(interaction: discord.Interaction, bet: int, choice: str):
         await interaction.response.send_message("Not enough balance.", ephemeral=True)
         return
 
-    result = random.choice(["heads", "tails"])
+    # House edge: 52% chance for house result
+    result = "heads" if random.random() < 0.48 else "tails"
 
     embed = discord.Embed(title="🪙 Coinflip", color=discord.Color.blue())
     embed.add_field(name="Your Choice", value=choice)
@@ -163,6 +167,7 @@ async def coinflip(interaction: discord.Interaction, bet: int, choice: str):
 @bot.tree.command(name="dice", description="Roll against the bot", guild=guild)
 @app_commands.describe(bet="Amount to bet")
 async def dice(interaction: discord.Interaction, bet: int):
+
     if bet < MIN_BET or bet > MAX_BET:
         await interaction.response.send_message("Invalid bet.", ephemeral=True)
         return
@@ -176,6 +181,10 @@ async def dice(interaction: discord.Interaction, bet: int):
     user_roll = random.randint(1, 6)
     bot_roll = random.randint(1, 6)
 
+    # House advantage: bot wins ties
+    if user_roll == bot_roll:
+        bot_roll = random.randint(1, 6)
+
     embed = discord.Embed(title="🎲 Dice Game", color=discord.Color.purple())
     embed.add_field(name="You rolled", value=user_roll)
     embed.add_field(name="Bot rolled", value=bot_roll)
@@ -184,12 +193,10 @@ async def dice(interaction: discord.Interaction, bet: int):
         account["balance"] += bet
         account["total_won"] += bet
         embed.add_field(name="Outcome", value=f"You won {bet} PNG!")
-    elif user_roll < bot_roll:
+    else:
         account["balance"] -= bet
         account["total_lost"] += bet
         embed.add_field(name="Outcome", value=f"You lost {bet} PNG.")
-    else:
-        embed.add_field(name="Outcome", value="Tie! No coins lost.")
 
     save_economy(data)
     await interaction.response.send_message(embed=embed)
@@ -299,50 +306,251 @@ async def slots(interaction: discord.Interaction, bet: int):
 
 # ================= ROULETTE =================
 
-@bot.tree.command(name="roulette", description="Play roulette", guild=guild)
-@app_commands.describe(bet="Amount to bet", choice="red, black, or number 0-36")
-async def roulette(interaction: discord.Interaction, bet: int, choice: str):
-    if bet < MIN_BET or bet > MAX_BET:
-        await interaction.response.send_message("Invalid bet.", ephemeral=True)
-        return
+# --- Configuration ---
+MIN_BET = 10
+MAX_BET = 10000
 
-    data, account = get_account(interaction.user.id)
+RED_NUMBERS = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
+ACTIVE_SESSIONS = {}  # {user_id: {"inactive_rounds": int, "last_bet": dict}}
 
-    if account["balance"] < bet:
-        await interaction.response.send_message("Not enough balance.", ephemeral=True)
-        return
+BET_TYPES = {
+    "single": 35,
+    "split": 17,
+    "street": 11,
+    "corner": 8,
+    "six_line": 5,
+    "column": 2,
+    "dozen": 2,
+    "red_black": 1,
+    "even_odd": 1,
+    "low_high": 1
+}
 
-    number = random.randint(0, 36)
-    red_numbers = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
-    color = "red" if number in red_numbers else "black"
-    if number == 0:
-        color = "green"
-
-    embed = discord.Embed(title="🎡 PNG Roulette", color=discord.Color.red())
-    embed.add_field(name="Number", value=number)
-    embed.add_field(name="Color", value=color)
-
-    win = False
-    payout = 0
-
-    if choice.lower() in ["red", "black"] and choice.lower() == color:
-        win = True
-        payout = bet
-    elif choice.isdigit() and int(choice) == number:
-        win = True
-        payout = bet * 35
-
-    if win:
-        account["balance"] += payout
-        account["total_won"] += payout
-        embed.add_field(name="Outcome", value=f"You won {payout} PNG!")
+# --- Helpers ---
+def check_color(number):
+    if number in RED_NUMBERS:
+        return "red"
+    elif number in [0, "00"]:
+        return "green"
     else:
-        account["balance"] -= bet
-        account["total_lost"] += bet
-        embed.add_field(name="Outcome", value=f"You lost {bet} PNG.")
+        return "black"
 
-    save_economy(data)
-    await interaction.response.send_message(embed=embed)
+# --- Multi-number button grid for complex bets ---
+class MultiNumberButtonView(View):
+    def __init__(self, parent_view, bet_type, required_count, bet_amount):
+        super().__init__(timeout=60)
+        self.parent_view = parent_view
+        self.bet_type = bet_type
+        self.required_count = required_count
+        self.bet_amount = bet_amount
+        self.selected_numbers = []
+
+        for n in list(range(37)) + ["00"]:
+            style = discord.ButtonStyle.danger if n in RED_NUMBERS else discord.ButtonStyle.secondary
+            btn = Button(label=str(n), style=style)
+            btn.callback = self.make_callback(str(n))
+            self.add_item(btn)
+
+    def make_callback(self, number):
+        async def callback(interaction: discord.Interaction):
+            if number in self.selected_numbers:
+                self.selected_numbers.remove(number)
+            else:
+                self.selected_numbers.append(number)
+            await interaction.response.send_message(
+                f"Selected numbers: {', '.join(self.selected_numbers)}", ephemeral=True
+            )
+            if len(self.selected_numbers) == self.required_count:
+                await self.parent_view.spin(
+                    interaction, self.bet_type, self.selected_numbers, self.bet_amount
+                )
+                self.stop()
+        return callback
+
+# --- Main Roulette View ---
+class RouletteView(View):
+    def __init__(self, user_id):
+        super().__init__(timeout=None)
+        self.user_id = str(user_id)
+
+    async def spin(self, interaction: discord.Interaction, bet_type=None, bet_choice=None, bet_amount=MIN_BET):
+        data, account = get_account(interaction.user.id)
+
+        if bet_type:  # Deduct balance
+            if account["balance"] < bet_amount:
+                await interaction.response.send_message("Not enough balance!", ephemeral=True)
+                return
+            account["balance"] -= bet_amount
+
+        numbers = list(range(37)) + ["00"]
+        result = random.choice(numbers)
+        color = check_color(result)
+
+        win = False
+        payout = 0
+        outcome_text = "No bet placed. Round ended."
+
+        if bet_type:
+            # Handle single number or multi-number bets
+            if bet_type in ["single", "split", "street", "corner", "six_line"]:
+                if str(result) in bet_choice:
+                    win = True
+                multiplier = BET_TYPES[bet_type]
+            elif bet_type == "red_black" and bet_choice.lower() == color:
+                win = True
+                multiplier = 1
+            elif bet_type == "even_odd" and result not in ["0","00"]:
+                if bet_choice.lower() == "even" and int(result) % 2 == 0:
+                    win = True
+                elif bet_choice.lower() == "odd" and int(result) % 2 == 1:
+                    win = True
+                multiplier = 1
+            elif bet_type == "low_high" and result not in ["0","00"]:
+                if bet_choice.lower() == "low" and 1 <= int(result) <= 18:
+                    win = True
+                elif bet_choice.lower() == "high" and 19 <= int(result) <= 36:
+                    win = True
+                multiplier = 1
+            elif bet_type == "dozen" and result not in ["0","00"]:
+                dozens = {"1st": range(1,13), "2nd": range(13,25), "3rd": range(25,37)}
+                if int(result) in dozens[bet_choice]:
+                    win = True
+                multiplier = 2
+            elif bet_type == "column" and result not in ["0","00"]:
+                columns = {
+                    "1st": {1,4,7,10,13,16,19,22,25,28,31,34},
+                    "2nd": {2,5,8,11,14,17,20,23,26,29,32,35},
+                    "3rd": {3,6,9,12,15,18,21,24,27,30,33,36}
+                }
+                if int(result) in columns[bet_choice]:
+                    win = True
+                multiplier = 2
+
+            if win:
+                payout = bet_amount * multiplier
+                account["balance"] += payout
+                account["total_won"] += payout
+                outcome_text = f"🎉 You won {payout} PNG!"
+            else:
+                account["total_lost"] += bet_amount
+                outcome_text = f"💀 You lost {bet_amount} PNG."
+
+        save_economy(data)
+
+        embed = discord.Embed(title="🎡 PNG Roulette Spin", color=discord.Color.random())
+        embed.add_field(name="Result", value=f"{result} ({color})")
+        embed.add_field(name="Outcome", value=outcome_text)
+        embed.set_footer(text="Bet again or leave the table.")
+        await interaction.response.send_message(embed=embed, view=self)
+
+    # --- Classic bet buttons ---
+    @discord.ui.button(label="Red", style=discord.ButtonStyle.danger)
+    async def red(self, interaction, button: Button):
+        await self.spin(interaction, "red_black", "red")
+
+    @discord.ui.button(label="Black", style=discord.ButtonStyle.secondary)
+    async def black(self, interaction, button: Button):
+        await self.spin(interaction, "red_black", "black")
+
+    @discord.ui.button(label="Even", style=discord.ButtonStyle.primary)
+    async def even(self, interaction, button: Button):
+        await self.spin(interaction, "even_odd", "even")
+
+    @discord.ui.button(label="Odd", style=discord.ButtonStyle.primary)
+    async def odd(self, interaction, button: Button):
+        await self.spin(interaction, "even_odd", "odd")
+
+    @discord.ui.button(label="Low 1-18", style=discord.ButtonStyle.success)
+    async def low(self, interaction, button: Button):
+        await self.spin(interaction, "low_high", "low")
+
+    @discord.ui.button(label="High 19-36", style=discord.ButtonStyle.success)
+    async def high(self, interaction, button: Button):
+        await self.spin(interaction, "low_high", "high")
+
+    @discord.ui.button(label="1st Dozen", style=discord.ButtonStyle.secondary)
+    async def first_dozen(self, interaction, button: Button):
+        await self.spin(interaction, "dozen", "1st")
+
+    @discord.ui.button(label="2nd Dozen", style=discord.ButtonStyle.secondary)
+    async def second_dozen(self, interaction, button: Button):
+        await self.spin(interaction, "dozen", "2nd")
+
+    @discord.ui.button(label="3rd Dozen", style=discord.ButtonStyle.secondary)
+    async def third_dozen(self, interaction, button: Button):
+        await self.spin(interaction, "dozen", "3rd")
+
+    @discord.ui.button(label="1st Column", style=discord.ButtonStyle.primary)
+    async def col1(self, interaction, button: Button):
+        await self.spin(interaction, "column", "1st")
+
+    @discord.ui.button(label="2nd Column", style=discord.ButtonStyle.primary)
+    async def col2(self, interaction, button: Button):
+        await self.spin(interaction, "column", "2nd")
+
+    @discord.ui.button(label="3rd Column", style=discord.ButtonStyle.primary)
+    async def col3(self, interaction, button: Button):
+        await self.spin(interaction, "column", "3rd")
+
+    # Multi-number bets
+    @discord.ui.button(label="Split", style=discord.ButtonStyle.secondary)
+    async def split(self, interaction, button: Button):
+        await interaction.response.send_message("Select 2 numbers for Split:", ephemeral=True,
+                                                view=MultiNumberButtonView(self, "split", 2, MIN_BET))
+
+    @discord.ui.button(label="Street", style=discord.ButtonStyle.secondary)
+    async def street(self, interaction, button: Button):
+        await interaction.response.send_message("Select 3 numbers for Street:", ephemeral=True,
+                                                view=MultiNumberButtonView(self, "street", 3, MIN_BET))
+
+    @discord.ui.button(label="Corner", style=discord.ButtonStyle.secondary)
+    async def corner(self, interaction, button: Button):
+        await interaction.response.send_message("Select 4 numbers for Corner:", ephemeral=True,
+                                                view=MultiNumberButtonView(self, "corner", 4, MIN_BET))
+
+    @discord.ui.button(label="Six-line", style=discord.ButtonStyle.secondary)
+    async def six_line(self, interaction, button: Button):
+        await interaction.response.send_message("Select 6 numbers for Six-line:", ephemeral=True,
+                                                view=MultiNumberButtonView(self, "six_line", 6, MIN_BET))
+
+    # Stay/Leave
+    @discord.ui.button(label="Stay", style=discord.ButtonStyle.primary)
+    async def stay(self, interaction, button: Button):
+        ACTIVE_SESSIONS[self.user_id]["inactive_rounds"] = 0
+        await interaction.response.send_message("👍 Staying at table. Next round auto-spins if no bet.", ephemeral=True)
+
+    @discord.ui.button(label="Leave", style=discord.ButtonStyle.danger)
+    async def leave(self, interaction, button: Button):
+        ACTIVE_SESSIONS.pop(self.user_id, None)
+        await interaction.response.send_message("👋 You left the roulette table.", ephemeral=True)
+
+# --- Command ---
+@bot.tree.command(name="roulette", description="Join the roulette table!", guild=guild)
+async def roulette_cmd(interaction: discord.Interaction):
+    user_id = str(interaction.user.id)
+    if user_id not in ACTIVE_SESSIONS:
+        ACTIVE_SESSIONS[user_id] = {"inactive_rounds": 0}
+    embed = discord.Embed(title="🎡 PNG Roulette Table", color=discord.Color.green())
+    embed.add_field(name="Instructions", value="Click buttons to bet! Stay/Leave to continue or exit.")
+    await interaction.response.send_message(embed=embed, view=RouletteView(user_id))
+
+# --- Auto-kick inactive players ---
+@tasks.loop(minutes=1)
+async def check_inactive_sessions():
+    to_remove = []
+    for user_id, sess in ACTIVE_SESSIONS.items():
+        sess["inactive_rounds"] += 1
+        if sess["inactive_rounds"] >= 3:
+            to_remove.append(user_id)
+    for user_id in to_remove:
+        ACTIVE_SESSIONS.pop(user_id, None)
+        try:
+            user = await bot.fetch_user(int(user_id))
+            await user.send("You were removed from the roulette table due to inactivity.")
+        except:
+            pass
+
+check_inactive_sessions.start()
 
 # ================= LEADERBOARD =================
 
