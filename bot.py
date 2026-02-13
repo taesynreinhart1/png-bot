@@ -85,6 +85,15 @@ intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 guild = discord.Object(id=GUILD_ID)
 
+bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    try:
+        synced = await bot.tree.sync(guild=guild)
+        print(f"Synced {len(synced)} commands.")
+    except Exception as e:
+        print(f"Failed to sync commands: {e}")
+
 # ================= BALANCE =================
 
 @bot.tree.command(name="balance", description="Check your PNG balance", guild=guild)
@@ -307,7 +316,7 @@ async def slots(interaction: discord.Interaction, bet: int):
 # ================= ROULETTE =================
 
 # --- Configuration ---
-MIN_BET = 10
+MIN_BET = 0
 MAX_BET = 10000
 
 RED_NUMBERS = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
@@ -582,14 +591,6 @@ async def leaderboardcoins(interaction: discord.Interaction):
 # ================= END CASINO SYSTEM =================
 
 # ---------------- COMMANDS ----------------
-@bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-    try:
-        synced = await bot.tree.sync(guild=guild)
-        print(f"Synced {len(synced)} commands.")
-    except Exception as e:
-        print(f"Failed to sync commands: {e}")
 
 @bot.tree.command(name="ping", description="Check bot latency and hype!", guild=guild)
 async def ping(interaction: discord.Interaction):
@@ -604,18 +605,28 @@ async def ping(interaction: discord.Interaction):
     hype = random.choice(hype_messages)
 
     await interaction.response.send_message(f"🏓 Pong! {latency_ms}ms\n{hype}")
+    
 @bot.tree.command(name="help", description="Show bot commands and info", guild=guild)
 async def help_command(interaction: discord.Interaction):
     help_text = (
-        "📜 **PNG Leaderboard Bot Commands** 📜\n\n"
+        "📜 **PNG Leaderboard & Casino Bot Commands** 📜\n\n"
+
+        "🎯 **Leaderboard & Player Stats** 🎯\n"
         "🔹 `/addkills player:<name> regular:<num> team:<num> month:<YYYY-MM>` — Add kills for a player (Authorized only)\n"
         "🔹 `/leaderboard month:<YYYY-MM>` — Show top players for a month (default = current month)\n"
         "🔹 `/player player:<name> month:<YYYY-MM>` — Show kills for a specific player\n"
         "🔹 `/resetmonth month:<YYYY-MM>` — Reset all kills for a month (Authorized only)\n"
-        "🔹 `/ping` — Check bot latency and hype!\n"
-        "🔹 `/help` — Show this help message\n\n"
-        "⚠️ **Note:** Only authorized users can add or reset kills.\n"
-        "Current month defaults to your server's time if not specified."
+        "🔹 `/ping` — Check bot latency\n\n"
+
+        "🎰 **Casino / PNG Economy Commands** 🎰\n"
+        "🔹 `/dice <amount>` — Roll dice against the bot\n"
+        "🔹 `/coinflip <amount>` — Flip a coin against the bot\n"
+        "🔹 `/roulette` — Join the roulette table and place bets\n\n"
+
+        "⚠️ **Notes:**\n"
+        "- Only authorized users can add or reset kills.\n"
+        "- Economy commands will use your PNG balance.\n"
+        "- Current month defaults to your server's time if not specified."
     )
 
     await interaction.response.send_message(help_text)
