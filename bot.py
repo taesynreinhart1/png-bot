@@ -622,21 +622,27 @@ async def help_command(interaction: discord.Interaction):
         "📜 **PNG Leaderboard & Casino Bot Commands** 📜\n\n"
 
         "🎯 **Leaderboard & Player Stats** 🎯\n"
-        "🔹 `/addkills player:<name> regular:<num> team:<num> month:<YYYY-MM>` — Add kills for a player (Authorized only)\n"
-        "🔹 `/leaderboard month:<YYYY-MM>` — Show top players for a month (default = current month)\n"
-        "🔹 `/player player:<name> month:<YYYY-MM>` — Show kills for a specific player\n"
+        "🔹 `/addkills player:<name> regular:<num> team:<num> month:<YYYY-MM>` — Add kills (Authorized only)\n"
+        "🔹 `/leaderboard month:<YYYY-MM>` — Show top players for a month\n"
+        "🔹 `/player player:<name> month:<YYYY-MM>` — Show stats for a specific player\n"
         "🔹 `/resetmonth month:<YYYY-MM>` — Reset all kills for a month (Authorized only)\n"
+        "🔹 `/leaderboardcoins` — Top richest PNG players\n"
         "🔹 `/ping` — Check bot latency\n\n"
 
-        "🎰 **Casino / PNG Economy Commands** 🎰\n"
-        "🔹 `/dice <amount>` — Roll dice against the bot\n"
-        "🔹 `/coinflip <amount>` — Flip a coin against the bot\n"
+        "🎰 **Casino / PNG Economy** 🎰\n"
+        "🔹 `/balance` — Check your PNG balance\n"
+        "🔹 `/daily` — Claim daily PNG coins\n"
+        "🔹 `/coinflip bet:<amount> choice:<heads/tails>` — Flip a coin against the bot\n"
+        "🔹 `/dice bet:<amount>` — Roll dice against the bot\n"
+        "🔹 `/dicevs opponent:<user> bet:<amount>` — Challenge another player to dice duel\n"
+        "🔹 `/slots bet:<amount>` — Play PNG slots\n"
         "🔹 `/roulette` — Join the roulette table and place bets\n\n"
 
-        "⚠️ **Notes:**\n"
+        "⚠️ **Notes** ⚠️\n"
+        "- Economy uses your PNG balance.\n"
         "- Only authorized users can add or reset kills.\n"
-        "- Economy commands will use your PNG balance.\n"
-        "- Current month defaults to your server's time if not specified."
+        "- Current month defaults to server time if not specified.\n"
+        "- Roulette inactive players are automatically removed after 3 rounds."
     )
 
     await interaction.response.send_message(help_text)
