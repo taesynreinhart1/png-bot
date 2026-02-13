@@ -20,13 +20,11 @@ import traceback
 class GitHubStorage:
     def __init__(self):
         self.token = os.getenv("GITHUBTOKEN")
-        self.repo = "taesynreinhart1/png-bot"  # CHANGE THIS to your actual repo name
+        self.repo = "taesynreinhart1/png-bot"
         self.branch = "main"
         
-        # Detect if we're in production (Render/Railway/Heroku)
         self.is_production = bool(os.environ.get('RENDER') or os.environ.get('RAILWAY') or os.environ.get('DYNO'))
         
-        # Cache for data
         self.economy_cache = {"users": {}}
         self.leaderboard_cache = {}
         self.economy_sha = None
@@ -39,12 +37,8 @@ class GitHubStorage:
             self.load_all()
     
     def load_from_github(self, path):
-        """Load JSON directly from GitHub repo"""
         url = f"https://api.github.com/repos/{self.repo}/contents/{path}?ref={self.branch}"
-        headers = {
-            "Authorization": f"token {self.token}",
-            "Accept": "application/vnd.github.v3+json"
-        }
+        headers = {"Authorization": f"token {self.token}", "Accept": "application/vnd.github.v3+json"}
         
         try:
             response = requests.get(url, headers=headers)
@@ -53,19 +47,15 @@ class GitHubStorage:
                 decoded = base64.b64decode(content['content']).decode('utf-8')
                 return json.loads(decoded), content['sha']
             else:
-                print(f"⚠️ GitHub file not found: {path}, will create on first save")
+                print(f"⚠️ GitHub file not found: {path}")
                 return None, None
         except Exception as e:
             print(f"❌ Error loading from GitHub: {e}")
             return None, None
     
     def save_to_github(self, path, data, sha=None):
-        """Save JSON directly to GitHub repo"""
         url = f"https://api.github.com/repos/{self.repo}/contents/{path}"
-        headers = {
-            "Authorization": f"token {self.token}",
-            "Accept": "application/vnd.github.v3+json"
-        }
+        headers = {"Authorization": f"token {self.token}", "Accept": "application/vnd.github.v3+json"}
         
         content = json.dumps(data, indent=4)
         encoded = base64.b64encode(content.encode('utf-8')).decode('utf-8')
@@ -75,7 +65,6 @@ class GitHubStorage:
             "content": encoded,
             "branch": self.branch
         }
-        
         if sha:
             payload["sha"] = sha
         
@@ -92,32 +81,27 @@ class GitHubStorage:
             return False
     
     def load_all(self):
-        """Load both economy and leaderboard data from GitHub"""
         if not self.is_production or not self.token:
             return
         
-        # Load economy
         econ_data, self.economy_sha = self.load_from_github("economy.json")
         if econ_data:
             self.economy_cache = econ_data
-            print(f"💰 Loaded economy data from GitHub: {len(econ_data.get('users', {}))} accounts")
+            print(f"💰 Loaded economy data: {len(econ_data.get('users', {}))} accounts")
         else:
             self.economy_cache = {"users": {}}
         
-        # Load leaderboard
         lb_data, self.leaderboard_sha = self.load_from_github("leaderboard.json")
         if lb_data:
             self.leaderboard_cache = lb_data
-            print(f"📊 Loaded leaderboard data from GitHub: {len(lb_data)} months")
+            print(f"📊 Loaded leaderboard data: {len(lb_data)} months")
         else:
             self.leaderboard_cache = {}
     
     def get_economy(self):
-        """Get economy data"""
         if self.is_production and self.token:
             return self.economy_cache
         else:
-            # Local file mode
             try:
                 with open(ECON_FILE, "r") as f:
                     return json.load(f)
@@ -125,18 +109,15 @@ class GitHubStorage:
                 return {"users": {}}
     
     def save_economy(self, data):
-        """Save economy data"""
         if self.is_production and self.token:
             self.economy_cache = data
             self.pending_saves = True
         else:
-            # Local file mode
             os.makedirs(os.path.dirname(ECON_FILE), exist_ok=True)
             with open(ECON_FILE, "w") as f:
                 json.dump(data, f, indent=4)
     
     def get_leaderboard(self):
-        """Get leaderboard data"""
         if self.is_production and self.token:
             return self.leaderboard_cache
         else:
@@ -147,19 +128,16 @@ class GitHubStorage:
                 return {}
     
     def save_leaderboard(self, data):
-        """Save leaderboard data"""
         if self.is_production and self.token:
             self.leaderboard_cache = data
             self.pending_saves = True
         else:
-            # Local file mode
             os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
             with open(DATA_FILE, "w") as f:
                 json.dump(data, f, indent=4)
     
     @tasks.loop(seconds=30)
     async def auto_save(self):
-        """Auto-save pending changes to GitHub"""
         if not self.is_production or not self.token:
             return
         
@@ -188,15 +166,12 @@ START_BALANCE = 500
 MIN_BET = 10
 MAX_BET = 1000
 DAILY_REWARD = 200
-DAILY_COOLDOWN = 86400  # 24 hours
+DAILY_COOLDOWN = 86400
 
-# Discord config
-PYTHON_VERSION = "3.11"
 GUILD_ID = 1361851093004320908
 TOKEN = os.getenv("BOTTOKEN")
 AUTHORIZED_USERS = [1035911200237699072, 1252375690242818121]
 
-# Initialize GitHub storage
 storage = GitHubStorage()
 
 # ================= HELPER FUNCTIONS =================
@@ -207,9 +182,7 @@ def save_data(data):
     storage.save_leaderboard(data)
 
 def get_month_key(month: str = None):
-    if month:
-        return month
-    return datetime.now().strftime("%Y-%m")
+    return month if month else datetime.now().strftime("%Y-%m")
 
 def is_authorized(user_id):
     return user_id in AUTHORIZED_USERS
@@ -232,7 +205,7 @@ def get_account(user_id):
             "last_daily": 0
         }
         save_economy(data)
-        print(f"🆕 Created new account for user {user_id}")
+        print(f"🆕 Created account for {user_id}")
 
     return data, data["users"][user_id]
 
@@ -244,103 +217,102 @@ guild = discord.Object(id=GUILD_ID)
 # ================= EVENTS =================
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
+    print(f"✅ Logged in as {bot.user}")
     
-    # Start auto-save loop in production
     if storage.is_production and storage.token:
         storage.auto_save.start()
-        print("🔄 GitHub auto-save loop started (every 30 seconds)")
+        print("🔄 Auto-save started (30s)")
     
     try:
         synced = await bot.tree.sync(guild=guild)
-        print(f"🔄 Synced {len(synced)} commands.")
+        print(f"🔄 Synced {len(synced)} commands")
     except Exception as e:
-        print(f"❌ Failed to sync commands: {e}")
+        print(f"❌ Sync failed: {e}")
 
 # ================= BALANCE =================
 @bot.tree.command(name="balance", description="Check your PNG balance", guild=guild)
 async def balance(interaction: discord.Interaction):
+    await interaction.response.defer()
     data, account = get_account(interaction.user.id)
 
     embed = discord.Embed(title="🪙 PNG Balance", color=discord.Color.gold())
     embed.add_field(name="User", value=interaction.user.mention)
     embed.add_field(name="Balance", value=f"{account['balance']} PNG")
 
-    await interaction.response.send_message(embed=embed)
-    print(f"💳 {interaction.user.name} checked balance: {account['balance']} PNG")
+    await interaction.followup.send(embed=embed)
 
 # ================= DAILY =================
 @bot.tree.command(name="daily", description="Claim daily PNG coins", guild=guild)
 async def daily(interaction: discord.Interaction):
+    await interaction.response.defer()
     data, account = get_account(interaction.user.id)
     now = int(time.time())
 
     if now - account["last_daily"] < DAILY_COOLDOWN:
         remaining = DAILY_COOLDOWN - (now - account["last_daily"])
         hours = remaining // 3600
-        await interaction.response.send_message(
-            f"⏳ Come back in {hours}h.",
-            ephemeral=True
-        )
+        await interaction.followup.send(f"⏳ {interaction.user.mention} Come back in {hours}h.", ephemeral=True)
         return
 
     account["balance"] += DAILY_REWARD
     account["last_daily"] = now
     save_economy(data)
 
-    await interaction.response.send_message(f"🎁 You received {DAILY_REWARD} PNG!")
-    print(f"🎁 {interaction.user.name} claimed daily. New balance: {account['balance']} PNG")
+    await interaction.followup.send(f"🎁 {interaction.user.mention} received {DAILY_REWARD} PNG!")
 
 # ================= COINFLIP =================
 @bot.tree.command(name="coinflip", description="Bet on heads or tails", guild=guild)
 @app_commands.describe(bet="Amount to bet", choice="heads or tails")
 async def coinflip(interaction: discord.Interaction, bet: int, choice: str):
+    await interaction.response.defer()
     choice = choice.lower()
 
     if choice not in ["heads", "tails"]:
-        await interaction.response.send_message("Choose heads or tails.", ephemeral=True)
+        await interaction.followup.send("Choose heads or tails.", ephemeral=True)
         return
 
     if bet < MIN_BET or bet > MAX_BET:
-        await interaction.response.send_message("Invalid bet amount.", ephemeral=True)
+        await interaction.followup.send("Invalid bet amount.", ephemeral=True)
         return
 
     data, account = get_account(interaction.user.id)
 
     if account["balance"] < bet:
-        await interaction.response.send_message("Not enough balance.", ephemeral=True)
+        await interaction.followup.send("Not enough balance.", ephemeral=True)
         return
 
     result = "heads" if random.random() < 0.48 else "tails"
 
     embed = discord.Embed(title="🪙 Coinflip", color=discord.Color.blue())
-    embed.add_field(name="Your Choice", value=choice)
+    embed.add_field(name="Player", value=interaction.user.mention)
+    embed.add_field(name="Choice", value=choice)
     embed.add_field(name="Result", value=result)
 
     if choice == result:
         account["balance"] += bet
         account["total_won"] += bet
-        embed.add_field(name="Outcome", value=f"You won {bet} PNG!")
+        embed.add_field(name="Outcome", value=f"💰 Won {bet} PNG!")
     else:
         account["balance"] -= bet
         account["total_lost"] += bet
-        embed.add_field(name="Outcome", value=f"You lost {bet} PNG.")
+        embed.add_field(name="Outcome", value=f"💸 Lost {bet} PNG.")
 
     save_economy(data)
-    await interaction.response.send_message(embed=embed)
+    await interaction.followup.send(embed=embed)
 
-# ================= DICE (VS BOT) =================
+# ================= DICE =================
 @bot.tree.command(name="dice", description="Roll against the bot", guild=guild)
 @app_commands.describe(bet="Amount to bet")
 async def dice(interaction: discord.Interaction, bet: int):
+    await interaction.response.defer()
     if bet < MIN_BET or bet > MAX_BET:
-        await interaction.response.send_message("Invalid bet.", ephemeral=True)
+        await interaction.followup.send("Invalid bet.", ephemeral=True)
         return
 
     data, account = get_account(interaction.user.id)
 
     if account["balance"] < bet:
-        await interaction.response.send_message("Not enough balance.", ephemeral=True)
+        await interaction.followup.send("Not enough balance.", ephemeral=True)
         return
 
     user_roll = random.randint(1, 6)
@@ -349,116 +321,119 @@ async def dice(interaction: discord.Interaction, bet: int):
     if user_roll == bot_roll:
         bot_roll = random.randint(1, 6)
 
-    embed = discord.Embed(title="🎲 Dice Game", color=discord.Color.purple())
-    embed.add_field(name="You rolled", value=user_roll)
-    embed.add_field(name="Bot rolled", value=bot_roll)
+    embed = discord.Embed(title="🎲 Dice", color=discord.Color.purple())
+    embed.add_field(name="Player", value=interaction.user.mention)
+    embed.add_field(name="Your Roll", value=user_roll)
+    embed.add_field(name="Bot Roll", value=bot_roll)
 
     if user_roll > bot_roll:
         account["balance"] += bet
         account["total_won"] += bet
-        embed.add_field(name="Outcome", value=f"You won {bet} PNG!")
+        embed.add_field(name="Outcome", value=f"💰 Won {bet} PNG!")
     else:
         account["balance"] -= bet
         account["total_lost"] += bet
-        embed.add_field(name="Outcome", value=f"You lost {bet} PNG.")
+        embed.add_field(name="Outcome", value=f"💸 Lost {bet} PNG.")
 
     save_economy(data)
-    await interaction.response.send_message(embed=embed)
+    await interaction.followup.send(embed=embed)
 
 # ================= DICE VS PLAYER =================
-@bot.tree.command(name="dicevs", description="Challenge another user to a dice duel", guild=guild)
-@app_commands.describe(opponent="User to challenge", bet="Amount each player bets")
+@bot.tree.command(name="dicevs", description="Challenge another user", guild=guild)
+@app_commands.describe(opponent="User to challenge", bet="Amount each bets")
 async def dicevs(interaction: discord.Interaction, opponent: discord.Member, bet: int):
+    await interaction.response.defer()
     if opponent.bot:
-        await interaction.response.send_message("You cannot challenge a bot.", ephemeral=True)
+        await interaction.followup.send("Can't challenge bots.", ephemeral=True)
         return
 
     if opponent.id == interaction.user.id:
-        await interaction.response.send_message("You cannot challenge yourself.", ephemeral=True)
+        await interaction.followup.send("Can't challenge yourself.", ephemeral=True)
         return
 
     if bet < MIN_BET or bet > MAX_BET:
-        await interaction.response.send_message("Invalid bet amount.", ephemeral=True)
+        await interaction.followup.send("Invalid bet.", ephemeral=True)
         return
 
-    data = load_economy()
     challenger_data, challenger_account = get_account(interaction.user.id)
     opponent_data, opponent_account = get_account(opponent.id)
 
     if challenger_account["balance"] < bet:
-        await interaction.response.send_message("You don't have enough balance.", ephemeral=True)
+        await interaction.followup.send("You don't have enough.", ephemeral=True)
         return
 
     if opponent_account["balance"] < bet:
-        await interaction.response.send_message("Opponent doesn't have enough balance.", ephemeral=True)
+        await interaction.followup.send(f"{opponent.mention} doesn't have enough.", ephemeral=True)
         return
 
     challenger_roll = random.randint(1, 6)
     opponent_roll = random.randint(1, 6)
 
     embed = discord.Embed(title="🎲 Dice Duel", color=discord.Color.dark_gold())
-    embed.add_field(name=interaction.user.display_name, value=f"Rolled: {challenger_roll}", inline=False)
-    embed.add_field(name=opponent.display_name, value=f"Rolled: {opponent_roll}", inline=False)
+    embed.add_field(name=interaction.user.display_name, value=f"Rolled: {challenger_roll}", inline=True)
+    embed.add_field(name=opponent.display_name, value=f"Rolled: {opponent_roll}", inline=True)
 
     if challenger_roll > opponent_roll:
         challenger_account["balance"] += bet
         opponent_account["balance"] -= bet
         challenger_account["total_won"] += bet
         opponent_account["total_lost"] += bet
-        embed.add_field(name="Winner", value=interaction.user.mention)
+        embed.add_field(name="Winner", value=f"🏆 {interaction.user.mention}", inline=False)
     elif opponent_roll > challenger_roll:
         opponent_account["balance"] += bet
         challenger_account["balance"] -= bet
         opponent_account["total_won"] += bet
         challenger_account["total_lost"] += bet
-        embed.add_field(name="Winner", value=opponent.mention)
+        embed.add_field(name="Winner", value=f"🏆 {opponent.mention}", inline=False)
     else:
-        embed.add_field(name="Result", value="Tie! No coins exchanged.")
+        embed.add_field(name="Result", value="🤝 Tie! No coins exchanged.", inline=False)
 
     data = load_economy()
     data["users"][str(interaction.user.id)] = challenger_account
     data["users"][str(opponent.id)] = opponent_account
     save_economy(data)
 
-    await interaction.response.send_message(embed=embed)
+    await interaction.followup.send(embed=embed)
 
 # ================= SLOTS =================
 @bot.tree.command(name="slots", description="Play PNG slots", guild=guild)
 @app_commands.describe(bet="Amount to bet")
 async def slots(interaction: discord.Interaction, bet: int):
+    await interaction.response.defer()
     if bet < MIN_BET or bet > MAX_BET:
-        await interaction.response.send_message("Invalid bet.", ephemeral=True)
+        await interaction.followup.send("Invalid bet.", ephemeral=True)
         return
 
     data, account = get_account(interaction.user.id)
 
     if account["balance"] < bet:
-        await interaction.response.send_message("Not enough balance.", ephemeral=True)
+        await interaction.followup.send("Not enough balance.", ephemeral=True)
         return
 
     symbols = ["🍒", "🍋", "🔔", "💎", "7️⃣"]
     result = [random.choice(symbols) for _ in range(3)]
 
     embed = discord.Embed(title="🎰 PNG Slots", color=discord.Color.orange())
+    embed.add_field(name="Player", value=interaction.user.mention)
     embed.add_field(name="Result", value=" | ".join(result))
 
     if result.count(result[0]) == 3:
         winnings = bet * 5
         account["balance"] += winnings
         account["total_won"] += winnings
-        embed.add_field(name="JACKPOT!", value=f"You won {winnings} PNG!")
+        embed.add_field(name="JACKPOT!", value=f"💰 Won {winnings} PNG!")
     elif len(set(result)) == 2:
         winnings = bet * 2
         account["balance"] += winnings
         account["total_won"] += winnings
-        embed.add_field(name="Nice!", value=f"You won {winnings} PNG!")
+        embed.add_field(name="Nice!", value=f"💰 Won {winnings} PNG!")
     else:
         account["balance"] -= bet
         account["total_lost"] += bet
-        embed.add_field(name="Outcome", value=f"You lost {bet} PNG.")
+        embed.add_field(name="Outcome", value=f"💸 Lost {bet} PNG.")
 
     save_economy(data)
-    await interaction.response.send_message(embed=embed)
+    await interaction.followup.send(embed=embed)
 
 # ================= ROULETTE =================
 MIN_BET_ROULETTE = 10
@@ -485,23 +460,18 @@ class BetAmountModal(Modal, title="Enter Bet Amount"):
         self.parent_view = parent_view
         self.bet_type = bet_type
         self.bet_choice = bet_choice
-        
-        self.amount = TextInput(
-            label="Bet Amount (PNG)",
-            placeholder=f"Min: {MIN_BET_ROULETTE}, Max: {MAX_BET_ROULETTE}",
-            required=True
-        )
+        self.amount = TextInput(label="Amount (PNG)", placeholder=f"Min: {MIN_BET_ROULETTE}")
         self.add_item(self.amount)
     
     async def on_submit(self, interaction: discord.Interaction):
         try:
             bet_amount = int(self.amount.value)
             if bet_amount < MIN_BET_ROULETTE or bet_amount > MAX_BET_ROULETTE:
-                await interaction.response.send_message(f"Bet must be between {MIN_BET_ROULETTE} and {MAX_BET_ROULETTE} PNG!", ephemeral=True)
+                await interaction.response.send_message("Invalid bet amount!", ephemeral=True)
                 return
             await self.parent_view.spin(interaction, self.bet_type, self.bet_choice, bet_amount)
         except ValueError:
-            await interaction.response.send_message("Please enter a valid number!", ephemeral=True)
+            await interaction.response.send_message("Enter a valid number!", ephemeral=True)
 
 class MultiNumberButtonView(View):
     def __init__(self, parent_view, bet_type, required_count):
@@ -522,7 +492,7 @@ class MultiNumberButtonView(View):
         btn_00.callback = self.make_callback("00")
         self.add_item(btn_00)
         
-        confirm_btn = Button(label="✅ Confirm Bet", style=discord.ButtonStyle.success)
+        confirm_btn = Button(label="✅ Confirm", style=discord.ButtonStyle.success)
         confirm_btn.callback = self.confirm_bet
         self.add_item(confirm_btn)
 
@@ -540,7 +510,7 @@ class MultiNumberButtonView(View):
     
     async def confirm_bet(self, interaction: discord.Interaction):
         if len(self.selected_numbers) != self.required_count:
-            await interaction.response.send_message(f"Please select exactly {self.required_count} numbers!", ephemeral=True)
+            await interaction.response.send_message(f"Select exactly {self.required_count} numbers!", ephemeral=True)
             return
         modal = BetAmountModal(self.parent_view, self.bet_type, self.selected_numbers)
         await interaction.response.send_modal(modal)
@@ -551,11 +521,12 @@ class RouletteView(View):
         self.user_id = str(user_id)
 
     async def spin(self, interaction: discord.Interaction, bet_type=None, bet_choice=None, bet_amount=None):
+        await interaction.response.defer()
         data, account = get_account(interaction.user.id)
 
         if bet_type and bet_amount:
             if account["balance"] < bet_amount:
-                await interaction.response.send_message("Not enough balance!", ephemeral=True)
+                await interaction.followup.send("Not enough balance!", ephemeral=True)
                 return
             account["balance"] -= bet_amount
             save_economy(data)
@@ -577,15 +548,11 @@ class RouletteView(View):
                 win = True
                 multiplier = 1
             elif bet_type == "even_odd" and result not in ["0","00"]:
-                if bet_choice.lower() == "even" and int(result) % 2 == 0:
-                    win = True
-                elif bet_choice.lower() == "odd" and int(result) % 2 == 1:
+                if (bet_choice.lower() == "even" and int(result) % 2 == 0) or (bet_choice.lower() == "odd" and int(result) % 2 == 1):
                     win = True
                 multiplier = 1
             elif bet_type == "low_high" and result not in ["0","00"]:
-                if bet_choice.lower() == "low" and 1 <= int(result) <= 18:
-                    win = True
-                elif bet_choice.lower() == "high" and 19 <= int(result) <= 36:
+                if (bet_choice.lower() == "low" and 1 <= int(result) <= 18) or (bet_choice.lower() == "high" and 19 <= int(result) <= 36):
                     win = True
                 multiplier = 1
             elif bet_type == "dozen" and result not in ["0","00"]:
@@ -607,22 +574,23 @@ class RouletteView(View):
                 payout = bet_amount * multiplier
                 account["balance"] += payout
                 account["total_won"] += payout
-                outcome_text = f"🎉 You won {payout} PNG!"
+                outcome_text = f"🎉 Won {payout} PNG!"
                 save_economy(data)
             else:
                 account["total_lost"] += bet_amount
-                outcome_text = f"💀 You lost {bet_amount} PNG."
+                outcome_text = f"💀 Lost {bet_amount} PNG."
                 save_economy(data)
 
         if self.user_id in ACTIVE_SESSIONS:
             ACTIVE_SESSIONS[self.user_id]["inactive_rounds"] = 0
 
-        embed = discord.Embed(title="🎡 PNG Roulette", color=discord.Color.random())
+        embed = discord.Embed(title="🎡 Roulette", color=discord.Color.random())
+        embed.add_field(name="Player", value=interaction.user.mention)
         embed.add_field(name="Result", value=f"{result} ({color})")
         embed.add_field(name="Outcome", value=outcome_text)
         embed.set_footer(text=f"Balance: {account['balance']} PNG")
         
-        await interaction.response.edit_message(embed=embed, view=self)
+        await interaction.followup.send(embed=embed, view=self)
 
     @discord.ui.button(label="Red", style=discord.ButtonStyle.danger, row=0)
     async def red(self, interaction, button: Button):
@@ -713,21 +681,23 @@ class RouletteView(View):
     @discord.ui.button(label="Leave", style=discord.ButtonStyle.danger, row=4)
     async def leave(self, interaction, button: Button):
         ACTIVE_SESSIONS.pop(self.user_id, None)
-        await interaction.response.send_message("👋 Left the table.", ephemeral=True)
+        await interaction.response.send_message("👋 Left table.", ephemeral=True)
         self.stop()
 
 @bot.tree.command(name="roulette", description="Join the roulette table!", guild=guild)
 async def roulette_cmd(interaction: discord.Interaction):
+    await interaction.response.defer()
     user_id = str(interaction.user.id)
     if user_id not in ACTIVE_SESSIONS:
         ACTIVE_SESSIONS[user_id] = {"inactive_rounds": 0}
     
     data, account = get_account(interaction.user.id)
     embed = discord.Embed(title="🎡 PNG Roulette", color=discord.Color.green())
-    embed.add_field(name="Your Balance", value=f"{account['balance']} PNG")
+    embed.add_field(name="Player", value=interaction.user.mention)
+    embed.add_field(name="Balance", value=f"{account['balance']} PNG")
     embed.add_field(name="Payouts", value="Single: 35x\nSplit: 17x\nStreet: 11x\nCorner: 8x\nSix-line: 5x\nColumn/Dozen: 2x\nOthers: 1x", inline=False)
     
-    await interaction.response.send_message(embed=embed, view=RouletteView(user_id))
+    await interaction.followup.send(embed=embed, view=RouletteView(user_id))
 
 @tasks.loop(minutes=1)
 async def check_inactive_sessions():
@@ -742,77 +712,67 @@ async def check_inactive_sessions():
 # ================= LEADERBOARD COINS =================
 @bot.tree.command(name="leaderboardcoins", description="Top richest players", guild=guild)
 async def leaderboardcoins(interaction: discord.Interaction):
+    await interaction.response.defer()
     data = load_economy()
 
     if not data["users"]:
-        await interaction.response.send_message("No data yet.")
+        await interaction.followup.send("No data yet.")
         return
 
-    sorted_users = sorted(
-        data["users"].items(),
-        key=lambda x: x[1]["balance"],
-        reverse=True
-    )
+    sorted_users = sorted(data["users"].items(), key=lambda x: x[1]["balance"], reverse=True)
 
     embed = discord.Embed(title="🏆 PNG Rich List", color=discord.Color.gold())
     for i, (user_id, info) in enumerate(sorted_users[:10], start=1):
         embed.add_field(name=f"{i}. <@{user_id}>", value=f"{info['balance']} PNG", inline=False)
 
-    await interaction.response.send_message(embed=embed)
+    await interaction.followup.send(embed=embed)
 
 # ================= KILLS COMMANDS =================
 @bot.tree.command(name="ping", description="Check bot latency and hype!", guild=guild)
 async def ping(interaction: discord.Interaction):
+    await interaction.response.defer()
     latency_ms = round(bot.latency * 1000)
-    hype_messages = [
-        "PNGGGG🗣️🗣️🔥🔥",
-        "LET'S GO PNGGGG 🚀🗣️🔥",
-        "PNGG MODE ACTIVATED 🏆💥🗣️",
-        "KILLS TRACKED! PNGGGG 💯🔥🗣️"
-    ]
-    hype = random.choice(hype_messages)
-    await interaction.response.send_message(f"🏓 Pong! {latency_ms}ms\n{hype}")
+    hype = random.choice(["PNGGGG🗣️🗣️🔥🔥", "LET'S GO PNGGGG 🚀🗣️🔥", "PNGG MODE ACTIVATED 🏆💥🗣️", "KILLS TRACKED! PNGGGG 💯🔥🗣️"])
+    await interaction.followup.send(f"🏓 Pong! {latency_ms}ms\n{hype}")
     
 @bot.tree.command(name="help", description="Show bot commands and info", guild=guild)
 async def help_command(interaction: discord.Interaction):
+    await interaction.response.defer()
     help_text = (
-        "📜 **PNG Leaderboard & Casino Bot Commands** 📜\n\n"
-        "🎯 **Leaderboard & Player Stats** 🎯\n"
-        "🔹 `/addkills player:<name> regular:<num> team:<num> month:<YYYY-MM>` — Add kills (Authorized only)\n"
-        "🔹 `/leaderboard month:<YYYY-MM>` — Show top players for a month\n"
-        "🔹 `/player player:<name> month:<YYYY-MM>` — Show stats for a specific player\n"
-        "🔹 `/resetmonth month:<YYYY-MM>` — Reset all kills for a month (Authorized only)\n"
-        "🔹 `/leaderboardcoins` — Top richest PNG players\n"
-        "🔹 `/ping` — Check bot latency\n\n"
-        "🎰 **Casino / PNG Economy** 🎰\n"
-        "🔹 `/balance` — Check your PNG balance\n"
-        "🔹 `/daily` — Claim daily PNG coins\n"
-        "🔹 `/coinflip bet:<amount> choice:<heads/tails>` — Flip a coin against the bot\n"
-        "🔹 `/dice bet:<amount>` — Roll dice against the bot\n"
-        "🔹 `/dicevs opponent:<user> bet:<amount>` — Challenge another player to dice duel\n"
-        "🔹 `/slots bet:<amount>` — Play PNG slots\n"
-        "🔹 `/roulette` — Join the roulette table and place bets\n\n"
-        "⚠️ **Notes** ⚠️\n"
-        "- Economy uses your PNG balance.\n"
-        "- Only authorized users can add or reset kills.\n"
-        "- Current month defaults to server time if not specified.\n"
-        "- Roulette inactive players are automatically removed after 3 rounds."
+        "📜 **PNG Bot Commands** 📜\n\n"
+        "🎯 **Kills Leaderboard** 🎯\n"
+        "🔹 `/addkills player:<name> regular:<num> team:<num> month:<YYYY-MM>` — Add kills (Auth only)\n"
+        "🔹 `/leaderboard month:<YYYY-MM>` — Show top players\n"
+        "🔹 `/player player:<name> month:<YYYY-MM>` — Show player stats\n"
+        "🔹 `/resetmonth month:<YYYY-MM>` — Reset month (Auth only)\n"
+        "🔹 `/leaderboardcoins` — Top richest players\n"
+        "🔹 `/ping` — Bot latency\n\n"
+        "🎰 **Casino** 🎰\n"
+        "🔹 `/balance` — Check PNG balance\n"
+        "🔹 `/daily` — Claim 200 PNG\n"
+        "🔹 `/coinflip bet:<amount> choice:<heads/tails>`\n"
+        "🔹 `/dice bet:<amount>` — Roll vs bot\n"
+        "🔹 `/dicevs opponent:<user> bet:<amount>` — Duel\n"
+        "🔹 `/slots bet:<amount>` — Play slots\n"
+        "🔹 `/roulette` — Join roulette table\n\n"
+        "⚠️ **All commands are public unless it's an error!**"
     )
-    await interaction.response.send_message(help_text)
+    await interaction.followup.send(help_text)
 
 @bot.tree.command(name="addkills", description="Add kills for a player (Authorized only)", guild=guild)
 @app_commands.describe(player="Player ID or name", regular="Regular kills", team="Team kills", month="Month YYYY-MM")
 async def addkills(interaction: discord.Interaction, player: str, regular: int = 0, team: int = 0, month: str = None):
     if not is_authorized(interaction.user.id):
-        await interaction.response.send_message("❌ You are not authorized to add kills.", ephemeral=True)
+        await interaction.response.send_message("❌ Not authorized.", ephemeral=True)
         return
 
+    await interaction.response.defer()
+    
     data = load_data()
     month_key = get_month_key(month)
 
     if month_key not in data:
         data[month_key] = {}
-
     if player not in data[month_key]:
         data[month_key][player] = {"regular": 0, "team": 0}
 
@@ -821,18 +781,19 @@ async def addkills(interaction: discord.Interaction, player: str, regular: int =
     data[month_key][player]["team"] += total_team
     save_data(data)
 
-    await interaction.response.send_message(
-        f"✅ Added **{regular} regular** and **{total_team} team** kills for **{player}** in **{month_key}**."
+    await interaction.followup.send(
+        f"✅ {interaction.user.mention} added **{regular} regular** + **{total_team} team** kills for **{player}** in **{month_key}**."
     )
 
 @bot.tree.command(name="leaderboard", description="Show leaderboard for a month", guild=guild)
 @app_commands.describe(month="Month YYYY-MM")
 async def leaderboard(interaction: discord.Interaction, month: str = None):
+    await interaction.response.defer()
     data = load_data()
     month_key = get_month_key(month)
 
     if month_key not in data or not data[month_key]:
-        await interaction.response.send_message(f"No data for {month_key}.")
+        await interaction.followup.send(f"No data for {month_key}.")
         return
 
     leaderboard_list = []
@@ -846,47 +807,53 @@ async def leaderboard(interaction: discord.Interaction, month: str = None):
     for i, (player, score) in enumerate(leaderboard_list[:10], start=1):
         msg += f"{i}. {player} — {score} kills\n"
 
-    await interaction.response.send_message(msg)
+    await interaction.followup.send(msg)
 
 @bot.tree.command(name="player", description="Show a player's kills for a month", guild=guild)
 @app_commands.describe(player="Player ID or name", month="Month YYYY-MM")
 async def player(interaction: discord.Interaction, player: str, month: str = None):
+    await interaction.response.defer()
     data = load_data()
     month_key = get_month_key(month)
 
     if month_key not in data or player not in data[month_key]:
-        await interaction.response.send_message(f"No data for {player} in {month_key}.")
+        await interaction.followup.send(f"No data for {player} in {month_key}.")
         return
 
     stats = data[month_key][player]
     total = stats.get("regular", 0) + stats.get("team", 0)
-    await interaction.response.send_message(
-        f"📊 **{player} — {month_key}**\nRegular kills: {stats.get('regular',0)}\n"
-        f"Team kills (divided by 2): {stats.get('team',0)}\n**Total: {total} kills**"
+    await interaction.followup.send(
+        f"📊 **{player} — {month_key}**\n"
+        f"Regular kills: {stats.get('regular',0)}\n"
+        f"Team kills (halved): {stats.get('team',0)}\n"
+        f"**Total: {total} kills**"
     )
 
 @bot.tree.command(name="resetmonth", description="Reset all kills for a month (Authorized only)", guild=guild)
 @app_commands.describe(month="Month YYYY-MM")
 async def resetmonth(interaction: discord.Interaction, month: str = None):
     if not is_authorized(interaction.user.id):
-        await interaction.response.send_message("❌ You are not authorized to reset months.", ephemeral=True)
+        await interaction.response.send_message("❌ Not authorized.", ephemeral=True)
         return
 
+    await interaction.response.defer()
     data = load_data()
     month_key = get_month_key(month)
 
     if month_key in data:
         data[month_key] = {}
         save_data(data)
-        await interaction.response.send_message(f"⚠️ Reset all data for {month_key}.")
+        await interaction.followup.send(f"⚠️ {interaction.user.mention} reset all data for **{month_key}**.")
     else:
-        await interaction.response.send_message(f"No data found for {month_key}.")
+        await interaction.followup.send(f"No data found for {month_key}.")
 
 @bot.tree.command(name="storage", description="Check GitHub storage status (Authorized only)", guild=guild)
 async def storage_status(interaction: discord.Interaction):
     if not is_authorized(interaction.user.id):
-        await interaction.response.send_message("❌ Not authorized", ephemeral=True)
+        await interaction.response.send_message("❌ Not authorized.", ephemeral=True)
         return
+    
+    await interaction.response.defer()
     
     status = f"**Storage Mode:** {'GitHub' if storage.is_production and storage.token else 'Local'}\n"
     if storage.is_production and storage.token:
@@ -899,7 +866,7 @@ async def storage_status(interaction: discord.Interaction):
         status += f"**Economy Accounts:** {len(econ.get('users', {}))}\n"
         status += f"**Leaderboard Months:** {len(lb)}\n"
     
-    await interaction.response.send_message(status, ephemeral=True)
+    await interaction.followup.send(status)
 
 # ================= FLASK KEEP-ALIVE =================
 app = Flask("")
@@ -918,12 +885,11 @@ threading.Thread(target=run_flask, daemon=True).start()
 if __name__ == "__main__":
     print("="*50)
     print("🚀 PNG BOT STARTING UP")
-    print(f"📁 Base directory: {BASE_DIR}")
-    print(f"🔧 Mode: {'GitHub (Production)' if storage.is_production and storage.token else 'Local (Development)'}")
+    print(f"📁 Base: {BASE_DIR}")
+    print(f"🔧 Mode: {'GitHub' if storage.is_production and storage.token else 'Local'}")
     if storage.is_production and storage.token:
-        print(f"📦 GitHub Repo: {storage.repo}")
-        print(f"🔑 GitHub Token: {'✅ Loaded' if storage.token else '❌ Missing'}")
+        print(f"📦 Repo: {storage.repo}")
+        print(f"🔑 Token: {'✅' if storage.token else '❌'}")
     print("="*50)
     
-    # Start the bot
     bot.run(TOKEN)
