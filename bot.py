@@ -15,7 +15,8 @@ from discord.ui import View, Button, Modal, TextInput
 from discord.ext import tasks
 
 
-ECON_FILE = "economy.json"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ECON_FILE = os.path.join(BASE_DIR, "economy.json")
 START_BALANCE = 500
 MIN_BET = 10
 MAX_BET = 1000
@@ -26,7 +27,7 @@ DAILY_COOLDOWN = 86400  # 24 hours
 # ---------------- CONFIG ----------------
 PYTHON_VERSION = "3.11"
 GUILD_ID = 1361851093004320908  # replace with your server ID
-DATA_FILE = "leaderboard.json"
+DATA_FILE = os.path.join(BASE_DIR, "leaderboard.json")  # FIXED: Use absolute path
 TOKEN = os.getenv("BOTTOKEN")
 
 # Add your authorized Discord IDs here (for backend commands)
@@ -38,11 +39,17 @@ def load_data():
         with open(DATA_FILE, "r") as f:
             return json.load(f)
     except FileNotFoundError:
-        return {}
+        # Create the file with empty structure if it doesn't exist
+        empty_data = {}
+        save_data(empty_data)
+        return empty_data
 
 def save_data(data):
+    # FIXED: Ensure directory exists and write with proper formatting
+    os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=4)
+    print(f"✅ Saved leaderboard data to {DATA_FILE}")  # Debug print
 
 def get_month_key(month: str = None):
     if month:
@@ -59,11 +66,17 @@ def load_economy():
         with open(ECON_FILE, "r") as f:
             return json.load(f)
     except FileNotFoundError:
-        return {"users": {}}
+        # Create the file with proper structure if it doesn't exist
+        empty_data = {"users": {}}
+        save_economy(empty_data)
+        return empty_data
 
 def save_economy(data):
+    # FIXED: Ensure directory exists and write with proper formatting
+    os.makedirs(os.path.dirname(ECON_FILE), exist_ok=True)
     with open(ECON_FILE, "w") as f:
         json.dump(data, f, indent=4)
+    print(f"💰 Saved economy data to {ECON_FILE}")  # Debug print
 
 def get_account(user_id):
     data = load_economy()
@@ -77,6 +90,7 @@ def get_account(user_id):
             "last_daily": 0
         }
         save_economy(data)
+        print(f"🆕 Created new account for user {user_id}")  # Debug print
 
     return data, data["users"][user_id]
 
@@ -84,15 +98,6 @@ def get_account(user_id):
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 guild = discord.Object(id=GUILD_ID)
-
-bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-    try:
-        synced = await bot.tree.sync(guild=guild)
-        print(f"Synced {len(synced)} commands.")
-    except Exception as e:
-        print(f"Failed to sync commands: {e}")
 
 # ================= BALANCE =================
 
@@ -105,6 +110,7 @@ async def balance(interaction: discord.Interaction):
     embed.add_field(name="Balance", value=f"{account['balance']} PNG")
 
     await interaction.response.send_message(embed=embed)
+    print(f"💳 {interaction.user.name} checked balance: {account['balance']} PNG")  # Debug print
 
 # ================= DAILY =================
 
@@ -129,6 +135,7 @@ async def daily(interaction: discord.Interaction):
     await interaction.response.send_message(
         f"🎁 You received {DAILY_REWARD} PNG!"
     )
+    print(f"🎁 {interaction.user.name} claimed daily reward. New balance: {account['balance']} PNG")  # Debug print
 
 # ================= COINFLIP =================
 
@@ -170,6 +177,7 @@ async def coinflip(interaction: discord.Interaction, bet: int, choice: str):
 
     save_economy(data)
     await interaction.response.send_message(embed=embed)
+    print(f"🪙 {interaction.user.name} played coinflip. New balance: {account['balance']} PNG")  # Debug print
 
 # ================= DICE (VS BOT) =================
 
@@ -209,6 +217,7 @@ async def dice(interaction: discord.Interaction, bet: int):
 
     save_economy(data)
     await interaction.response.send_message(embed=embed)
+    print(f"🎲 {interaction.user.name} played dice. New balance: {account['balance']} PNG")  # Debug print
 
 # ================= DICE VS PLAYER =================
 
@@ -273,6 +282,7 @@ async def dicevs(interaction: discord.Interaction, opponent: discord.Member, bet
     save_economy(data)
 
     await interaction.response.send_message(embed=embed)
+    print(f"🎲 {interaction.user.name} vs {opponent.name} dice duel. Bet: {bet} PNG")  # Debug print
 
 # ================= SLOTS =================
 
@@ -312,12 +322,13 @@ async def slots(interaction: discord.Interaction, bet: int):
 
     save_economy(data)
     await interaction.response.send_message(embed=embed)
+    print(f"🎰 {interaction.user.name} played slots. New balance: {account['balance']} PNG")  # Debug print
 
 # ================= ROULETTE =================
 
 # --- Configuration ---
-MIN_BET = 0
-MAX_BET = 10000
+MIN_BET_ROULETTE = 10  # Changed from 0 to 10 to be consistent with other games
+MAX_BET_ROULETTE = 10000
 
 RED_NUMBERS = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
 ACTIVE_SESSIONS = {}  # {user_id: {"inactive_rounds": int, "last_bet": dict}}
@@ -344,21 +355,59 @@ def check_color(number):
     else:
         return "black"
 
+# --- Bet Amount Modal ---
+class BetAmountModal(Modal, title="Enter Bet Amount"):
+    def __init__(self, parent_view, bet_type, bet_choice=None):
+        super().__init__()
+        self.parent_view = parent_view
+        self.bet_type = bet_type
+        self.bet_choice = bet_choice
+        
+        self.amount = TextInput(
+            label="Bet Amount (PNG)",
+            placeholder=f"Min: {MIN_BET_ROULETTE}, Max: {MAX_BET_ROULETTE}",
+            required=True,
+            min_length=1,
+            max_length=5
+        )
+        self.add_item(self.amount)
+    
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            bet_amount = int(self.amount.value)
+            if bet_amount < MIN_BET_ROULETTE or bet_amount > MAX_BET_ROULETTE:
+                await interaction.response.send_message(f"Bet must be between {MIN_BET_ROULETTE} and {MAX_BET_ROULETTE} PNG!", ephemeral=True)
+                return
+            await self.parent_view.spin(interaction, self.bet_type, self.bet_choice, bet_amount)
+        except ValueError:
+            await interaction.response.send_message("Please enter a valid number!", ephemeral=True)
+
 # --- Multi-number button grid for complex bets ---
 class MultiNumberButtonView(View):
-    def __init__(self, parent_view, bet_type, required_count, bet_amount):
+    def __init__(self, parent_view, bet_type, required_count):
         super().__init__(timeout=60)
         self.parent_view = parent_view
         self.bet_type = bet_type
         self.required_count = required_count
-        self.bet_amount = bet_amount
         self.selected_numbers = []
 
-        for n in list(range(37)) + ["00"]:
-            style = discord.ButtonStyle.danger if n in RED_NUMBERS else discord.ButtonStyle.secondary
-            btn = Button(label=str(n), style=style)
-            btn.callback = self.make_callback(str(n))
-            self.add_item(btn)
+        # Add number buttons in rows
+        for row in range(0, 37, 6):  # 0-36
+            for n in range(row, min(row + 6, 37)):
+                style = discord.ButtonStyle.danger if n in RED_NUMBERS else discord.ButtonStyle.secondary
+                btn = Button(label=str(n), style=style)
+                btn.callback = self.make_callback(str(n))
+                self.add_item(btn)
+        
+        # Add 00 button
+        btn_00 = Button(label="00", style=discord.ButtonStyle.secondary)
+        btn_00.callback = self.make_callback("00")
+        self.add_item(btn_00)
+        
+        # Add confirm button
+        confirm_btn = Button(label="✅ Confirm Bet", style=discord.ButtonStyle.success)
+        confirm_btn.callback = self.confirm_bet
+        self.add_item(confirm_btn)
 
     def make_callback(self, number):
         async def callback(interaction: discord.Interaction):
@@ -366,30 +415,35 @@ class MultiNumberButtonView(View):
                 self.selected_numbers.remove(number)
             else:
                 self.selected_numbers.append(number)
-            await interaction.response.send_message(
-                f"Selected numbers: {', '.join(self.selected_numbers)}", ephemeral=True
+            await interaction.response.edit_message(
+                content=f"Selected numbers: {', '.join(self.selected_numbers)}\nNeed {self.required_count - len(self.selected_numbers)} more...",
+                view=self
             )
-            if len(self.selected_numbers) == self.required_count:
-                await self.parent_view.spin(
-                    interaction, self.bet_type, self.selected_numbers, self.bet_amount
-                )
-                self.stop()
         return callback
+    
+    async def confirm_bet(self, interaction: discord.Interaction):
+        if len(self.selected_numbers) != self.required_count:
+            await interaction.response.send_message(f"Please select exactly {self.required_count} numbers!", ephemeral=True)
+            return
+        
+        modal = BetAmountModal(self.parent_view, self.bet_type, self.selected_numbers)
+        await interaction.response.send_modal(modal)
 
 # --- Main Roulette View ---
 class RouletteView(View):
     def __init__(self, user_id):
-        super().__init__(timeout=None)
+        super().__init__(timeout=300)  # 5 minute timeout
         self.user_id = str(user_id)
 
-    async def spin(self, interaction: discord.Interaction, bet_type=None, bet_choice=None, bet_amount=MIN_BET):
+    async def spin(self, interaction: discord.Interaction, bet_type=None, bet_choice=None, bet_amount=None):
         data, account = get_account(interaction.user.id)
 
-        if bet_type:  # Deduct balance
+        if bet_type and bet_amount:  # Deduct balance
             if account["balance"] < bet_amount:
                 await interaction.response.send_message("Not enough balance!", ephemeral=True)
                 return
             account["balance"] -= bet_amount
+            save_economy(data)
 
         numbers = list(range(37)) + ["00"]
         result = random.choice(numbers)
@@ -399,7 +453,7 @@ class RouletteView(View):
         payout = 0
         outcome_text = "No bet placed. Round ended."
 
-        if bet_type:
+        if bet_type and bet_amount:
             # Handle single number or multi-number bets
             if bet_type in ["single", "split", "street", "corner", "six_line"]:
                 if str(result) in bet_choice:
@@ -440,98 +494,122 @@ class RouletteView(View):
                 account["balance"] += payout
                 account["total_won"] += payout
                 outcome_text = f"🎉 You won {payout} PNG!"
+                save_economy(data)
             else:
                 account["total_lost"] += bet_amount
+                save_economy(data)
                 outcome_text = f"💀 You lost {bet_amount} PNG."
 
-        save_economy(data)
+        # Update session inactivity counter
+        if self.user_id in ACTIVE_SESSIONS:
+            ACTIVE_SESSIONS[self.user_id]["inactive_rounds"] = 0
 
         embed = discord.Embed(title="🎡 PNG Roulette Spin", color=discord.Color.random())
         embed.add_field(name="Result", value=f"{result} ({color})")
         embed.add_field(name="Outcome", value=outcome_text)
-        embed.set_footer(text="Bet again or leave the table.")
-        await interaction.response.send_message(embed=embed, view=self)
+        embed.set_footer(text=f"Balance: {account['balance']} PNG | Bet again or leave the table.")
+        
+        await interaction.response.edit_message(embed=embed, view=self)
+        print(f"🎡 {interaction.user.name} played roulette. Bet: {bet_amount if bet_amount else 0} PNG, Result: {win}")  # Debug print
 
     # --- Classic bet buttons ---
-    @discord.ui.button(label="Red", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="Red", style=discord.ButtonStyle.danger, row=0)
     async def red(self, interaction, button: Button):
-        await self.spin(interaction, "red_black", "red")
+        modal = BetAmountModal(self, "red_black", "red")
+        await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Black", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Black", style=discord.ButtonStyle.secondary, row=0)
     async def black(self, interaction, button: Button):
-        await self.spin(interaction, "red_black", "black")
+        modal = BetAmountModal(self, "red_black", "black")
+        await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Even", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Even", style=discord.ButtonStyle.primary, row=0)
     async def even(self, interaction, button: Button):
-        await self.spin(interaction, "even_odd", "even")
+        modal = BetAmountModal(self, "even_odd", "even")
+        await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Odd", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Odd", style=discord.ButtonStyle.primary, row=0)
     async def odd(self, interaction, button: Button):
-        await self.spin(interaction, "even_odd", "odd")
+        modal = BetAmountModal(self, "even_odd", "odd")
+        await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Low 1-18", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="Low 1-18", style=discord.ButtonStyle.success, row=1)
     async def low(self, interaction, button: Button):
-        await self.spin(interaction, "low_high", "low")
+        modal = BetAmountModal(self, "low_high", "low")
+        await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="High 19-36", style=discord.ButtonStyle.success)
+    @discord.ui.button(label="High 19-36", style=discord.ButtonStyle.success, row=1)
     async def high(self, interaction, button: Button):
-        await self.spin(interaction, "low_high", "high")
+        modal = BetAmountModal(self, "low_high", "high")
+        await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="1st Dozen", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="1st Dozen", style=discord.ButtonStyle.secondary, row=1)
     async def first_dozen(self, interaction, button: Button):
-        await self.spin(interaction, "dozen", "1st")
+        modal = BetAmountModal(self, "dozen", "1st")
+        await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="2nd Dozen", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="2nd Dozen", style=discord.ButtonStyle.secondary, row=1)
     async def second_dozen(self, interaction, button: Button):
-        await self.spin(interaction, "dozen", "2nd")
+        modal = BetAmountModal(self, "dozen", "2nd")
+        await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="3rd Dozen", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="3rd Dozen", style=discord.ButtonStyle.secondary, row=2)
     async def third_dozen(self, interaction, button: Button):
-        await self.spin(interaction, "dozen", "3rd")
+        modal = BetAmountModal(self, "dozen", "3rd")
+        await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="1st Column", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="1st Column", style=discord.ButtonStyle.primary, row=2)
     async def col1(self, interaction, button: Button):
-        await self.spin(interaction, "column", "1st")
+        modal = BetAmountModal(self, "column", "1st")
+        await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="2nd Column", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="2nd Column", style=discord.ButtonStyle.primary, row=2)
     async def col2(self, interaction, button: Button):
-        await self.spin(interaction, "column", "2nd")
+        modal = BetAmountModal(self, "column", "2nd")
+        await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="3rd Column", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="3rd Column", style=discord.ButtonStyle.primary, row=2)
     async def col3(self, interaction, button: Button):
-        await self.spin(interaction, "column", "3rd")
+        modal = BetAmountModal(self, "column", "3rd")
+        await interaction.response.send_modal(modal)
 
-    # Multi-number bets
-    @discord.ui.button(label="Split", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Single", style=discord.ButtonStyle.danger, row=3)
+    async def single(self, interaction, button: Button):
+        await interaction.response.send_message("Select 1 number for Single:", ephemeral=True,
+                                                view=MultiNumberButtonView(self, "single", 1))
+
+    @discord.ui.button(label="Split", style=discord.ButtonStyle.secondary, row=3)
     async def split(self, interaction, button: Button):
         await interaction.response.send_message("Select 2 numbers for Split:", ephemeral=True,
-                                                view=MultiNumberButtonView(self, "split", 2, MIN_BET))
+                                                view=MultiNumberButtonView(self, "split", 2))
 
-    @discord.ui.button(label="Street", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Street", style=discord.ButtonStyle.secondary, row=3)
     async def street(self, interaction, button: Button):
         await interaction.response.send_message("Select 3 numbers for Street:", ephemeral=True,
-                                                view=MultiNumberButtonView(self, "street", 3, MIN_BET))
+                                                view=MultiNumberButtonView(self, "street", 3))
 
-    @discord.ui.button(label="Corner", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Corner", style=discord.ButtonStyle.secondary, row=4)
     async def corner(self, interaction, button: Button):
         await interaction.response.send_message("Select 4 numbers for Corner:", ephemeral=True,
-                                                view=MultiNumberButtonView(self, "corner", 4, MIN_BET))
+                                                view=MultiNumberButtonView(self, "corner", 4))
 
-    @discord.ui.button(label="Six-line", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Six-line", style=discord.ButtonStyle.secondary, row=4)
     async def six_line(self, interaction, button: Button):
         await interaction.response.send_message("Select 6 numbers for Six-line:", ephemeral=True,
-                                                view=MultiNumberButtonView(self, "six_line", 6, MIN_BET))
+                                                view=MultiNumberButtonView(self, "six_line", 6))
 
     # Stay/Leave
-    @discord.ui.button(label="Stay", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Stay", style=discord.ButtonStyle.primary, row=4)
     async def stay(self, interaction, button: Button):
-        ACTIVE_SESSIONS[self.user_id]["inactive_rounds"] = 0
+        if self.user_id in ACTIVE_SESSIONS:
+            ACTIVE_SESSIONS[self.user_id]["inactive_rounds"] = 0
         await interaction.response.send_message("👍 Staying at table. Next round auto-spins if no bet.", ephemeral=True)
 
-    @discord.ui.button(label="Leave", style=discord.ButtonStyle.danger)
+    @discord.ui.button(label="Leave", style=discord.ButtonStyle.danger, row=4)
     async def leave(self, interaction, button: Button):
         ACTIVE_SESSIONS.pop(self.user_id, None)
         await interaction.response.send_message("👋 You left the roulette table.", ephemeral=True)
+        self.stop()
 
 # --- Command ---
 @bot.tree.command(name="roulette", description="Join the roulette table!", guild=guild)
@@ -539,9 +617,15 @@ async def roulette_cmd(interaction: discord.Interaction):
     user_id = str(interaction.user.id)
     if user_id not in ACTIVE_SESSIONS:
         ACTIVE_SESSIONS[user_id] = {"inactive_rounds": 0}
+    
+    data, account = get_account(interaction.user.id)
     embed = discord.Embed(title="🎡 PNG Roulette Table", color=discord.Color.green())
-    embed.add_field(name="Instructions", value="Click buttons to bet! Stay/Leave to continue or exit.")
+    embed.add_field(name="Welcome to Roulette!", value="Click buttons to place bets!")
+    embed.add_field(name="Your Balance", value=f"{account['balance']} PNG", inline=False)
+    embed.add_field(name="Payouts", value="Single: 35x\nSplit: 17x\nStreet: 11x\nCorner: 8x\nSix-line: 5x\nColumn/Dozen: 2x\nRed/Black/Even/Odd/Low/High: 1x", inline=False)
+    
     await interaction.response.send_message(embed=embed, view=RouletteView(user_id))
+    print(f"🎡 {interaction.user.name} joined roulette table")  # Debug print
 
 # --- Auto-kick inactive players ---
 @tasks.loop(minutes=1)
@@ -556,20 +640,9 @@ async def check_inactive_sessions():
         try:
             user = await bot.fetch_user(int(user_id))
             await user.send("You were removed from the roulette table due to inactivity.")
+            print(f"👋 Removed inactive user {user_id} from roulette")  # Debug print
         except:
             pass
-
-@bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-    try:
-        synced = await bot.tree.sync(guild=guild)
-        print(f"Synced {len(synced)} commands.")
-    except Exception as e:
-        print(f"Failed to sync commands: {e}")
-    
-    # Start the task loop after the event loop exists
-    check_inactive_sessions.start()
 
 # ================= LEADERBOARD =================
 
@@ -673,6 +746,7 @@ async def addkills(interaction: discord.Interaction, player: str, regular: int =
     await interaction.response.send_message(
         f"✅ Added **{regular} regular** and **{total_team} team** kills for **{player}** in **{month_key}**."
     )
+    print(f"📊 {interaction.user.name} added kills for {player}: {regular} reg, {team} team (halved to {total_team})")  # Debug print
 
 # Show leaderboard (anyone)
 @bot.tree.command(name="leaderboard", description="Show leaderboard for a month", guild=guild)
@@ -731,6 +805,7 @@ async def resetmonth(interaction: discord.Interaction, month: str = None):
         data[month_key] = {}
         save_data(data)
         await interaction.response.send_message(f"⚠️ Reset all data for {month_key}.")
+        print(f"⚠️ {interaction.user.name} reset month {month_key}")  # Debug print
     else:
         await interaction.response.send_message(f"No data found for {month_key}.")
 
@@ -749,5 +824,9 @@ def run_flask():
 threading.Thread(target=run_flask).start()
 
 # ---------------- RUN BOT ----------------
-bot.run(TOKEN)
+if __name__ == "__main__":
+    print(f"🚀 Starting bot with data files:")
+    print(f"   📊 Leaderboard: {DATA_FILE}")
+    print(f"   💰 Economy: {ECON_FILE}")
+    bot.run(TOKEN)
 
