@@ -52,6 +52,13 @@ def is_authorized(user_id):
 
 # ================= PNG CASINO SYSTEM =================
 
+def load_economy():
+    try:
+        with open(ECON_FILE, "r") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"users": {}}
+
 def save_economy(data):
     with open(ECON_FILE, "w") as f:
         json.dump(data, f, indent=4)
@@ -243,7 +250,11 @@ async def dicevs(interaction: discord.Interaction, opponent: discord.Member, bet
     else:
         embed.add_field(name="Result", value="Tie! No coins exchanged.")
 
-    save_economy(load_economy())
+    # SAVE BOTH ACCOUNTS PROPERLY
+    data = load_economy()
+    data["users"][str(interaction.user.id)] = challenger_account
+    data["users"][str(opponent.id)] = opponent_account
+    save_economy(data)
 
     await interaction.response.send_message(embed=embed)
 
