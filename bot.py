@@ -473,6 +473,8 @@ async def slots(interaction: discord.Interaction, bet: int):
     await interaction.followup.send(embed=embed)
 
 # ================= ROULETTE =================
+import asyncio  # Make sure this is at the top with other imports
+
 MIN_BET_ROULETTE = 10
 MAX_BET_ROULETTE = 10000
 RED_NUMBERS = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
@@ -491,24 +493,84 @@ def check_color(number):
     else:
         return "black"
 
-class BetAmountModal(Modal, title="Enter Bet Amount"):
+def number_to_emoji(num):
+    """Convert number to emoji"""
+    emoji_map = {
+        0: "0️⃣", 1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 5: "5️⃣", 6: "6️⃣", 7: "7️⃣", 8: "8️⃣", 9: "9️⃣",
+        10: "🔟", 11: "1️⃣1️⃣", 12: "1️⃣2️⃣", 13: "1️⃣3️⃣", 14: "1️⃣4️⃣", 15: "1️⃣5️⃣", 16: "1️⃣6️⃣",
+        17: "1️⃣7️⃣", 18: "1️⃣8️⃣", 19: "1️⃣9️⃣", 20: "2️⃣0️⃣", 21: "2️⃣1️⃣", 22: "2️⃣2️⃣", 23: "2️⃣3️⃣",
+        24: "2️⃣4️⃣", 25: "2️⃣5️⃣", 26: "2️⃣6️⃣", 27: "2️⃣7️⃣", 28: "2️⃣8️⃣", 29: "2️⃣9️⃣", 30: "3️⃣0️⃣",
+        31: "3️⃣1️⃣", 32: "3️⃣2️⃣", 33: "3️⃣3️⃣", 34: "3️⃣4️⃣", 35: "3️⃣5️⃣", 36: "3️⃣6️⃣", "00": "0️⃣0️⃣"
+    }
+    return emoji_map.get(num, str(num))
+
+def create_roulette_table(result, color):
+    """Create a visual roulette table with the result highlighted"""
+    
+    # Define the roulette layout
+    row1 = ["3", "6", "9", "12", "15", "20", "25", "30", "35"]
+    row2 = ["2", "5", "8", "11", "14", "19", "24", "29", "34"]
+    row3 = ["1", "4", "7", "10", "13", "18", "23", "28", "33"]
+    
+    # Convert rows to emoji
+    row1_emoji = " ".join([number_to_emoji(int(n)) for n in row1])
+    row2_emoji = " ".join([number_to_emoji(int(n)) for n in row2])
+    row3_emoji = " ".join([number_to_emoji(int(n)) for n in row3])
+    
+    # Result display
+    if result in [0, "00"]:
+        result_display = f"{number_to_emoji(result)} 🟢"
+    else:
+        color_emoji = "🔴" if color == "red" else "⚫"
+        result_display = f"{number_to_emoji(int(result))} {color_emoji}"
+    
+    # Build the table
+    table = (
+        f"╔════════════════════════════════════════════╗\n"
+        f"║              🎯 **RESULT** 🎯              ║\n"
+        f"║                                           ║\n"
+        f"║              **{result_display}**              ║\n"
+        f"║                                           ║\n"
+        f"╠════════════════════════════════════════════╣\n"
+        f"║  {row1_emoji}  ║\n"
+        f"║  {row2_emoji}  ║\n"
+        f"║  {row3_emoji}  ║\n"
+        f"║                                           ║\n"
+        f"║          0️⃣        🟢        0️⃣0️⃣          ║\n"
+        f"╚════════════════════════════════════════════╝"
+    )
+    return table
+
+class BetAmountModal(Modal, title="💰 Place Your Bet"):
     def __init__(self, parent_view, bet_type, bet_choice=None):
         super().__init__()
         self.parent_view = parent_view
         self.bet_type = bet_type
         self.bet_choice = bet_choice
-        self.amount = TextInput(label="Amount (PNG)", placeholder=f"Min: {MIN_BET_ROULETTE}")
+        
+        bet_name = bet_type.replace("_", " ").title()
+        if bet_choice:
+            if isinstance(bet_choice, list):
+                bet_name = f"{bet_type.title()} {','.join(bet_choice[:3])}..."
+            else:
+                bet_name = f"{bet_type.title()} {bet_choice}"
+        
+        self.amount = TextInput(
+            label=f"Amount for {bet_name}",
+            placeholder=f"Min: {MIN_BET_ROULETTE} PNG, Max: {MAX_BET_ROULETTE} PNG",
+            required=True
+        )
         self.add_item(self.amount)
     
     async def on_submit(self, interaction: discord.Interaction):
         try:
             bet_amount = int(self.amount.value)
             if bet_amount < MIN_BET_ROULETTE or bet_amount > MAX_BET_ROULETTE:
-                await interaction.response.send_message("Invalid bet amount!", ephemeral=True)
+                await interaction.response.send_message(f"❌ Bet must be {MIN_BET_ROULETTE}-{MAX_BET_ROULETTE} PNG!", ephemeral=True)
                 return
             await self.parent_view.spin(interaction, self.bet_type, self.bet_choice, bet_amount)
         except ValueError:
-            await interaction.response.send_message("Enter a valid number!", ephemeral=True)
+            await interaction.response.send_message("❌ Enter a valid number!", ephemeral=True)
 
 class MultiNumberButtonView(View):
     def __init__(self, parent_view, bet_type, required_count):
@@ -518,6 +580,7 @@ class MultiNumberButtonView(View):
         self.required_count = required_count
         self.selected_numbers = []
 
+        # Add number buttons in rows
         for row in range(0, 37, 6):
             for n in range(row, min(row + 6, 37)):
                 style = discord.ButtonStyle.danger if n in RED_NUMBERS else discord.ButtonStyle.secondary
@@ -529,9 +592,13 @@ class MultiNumberButtonView(View):
         btn_00.callback = self.make_callback("00")
         self.add_item(btn_00)
         
-        confirm_btn = Button(label="✅ Confirm", style=discord.ButtonStyle.success)
+        confirm_btn = Button(label="✅ Place Bet", style=discord.ButtonStyle.success, row=4)
         confirm_btn.callback = self.confirm_bet
         self.add_item(confirm_btn)
+        
+        cancel_btn = Button(label="❌ Cancel", style=discord.ButtonStyle.danger, row=4)
+        cancel_btn.callback = self.cancel
+        self.add_item(cancel_btn)
 
     def make_callback(self, number):
         async def callback(interaction: discord.Interaction):
@@ -539,23 +606,33 @@ class MultiNumberButtonView(View):
                 self.selected_numbers.remove(number)
             else:
                 self.selected_numbers.append(number)
+            
+            selected = ', '.join(self.selected_numbers) if self.selected_numbers else "None"
+            need = max(0, self.required_count - len(self.selected_numbers))
+            
             await interaction.response.edit_message(
-                content=f"Selected: {', '.join(self.selected_numbers)}\nNeed {self.required_count - len(self.selected_numbers)} more...",
+                content=f"**Selected:** {selected}\n**Need:** {need} more number{'s' if need != 1 else ''}",
                 view=self
             )
         return callback
     
     async def confirm_bet(self, interaction: discord.Interaction):
         if len(self.selected_numbers) != self.required_count:
-            await interaction.response.send_message(f"Select exactly {self.required_count} numbers!", ephemeral=True)
+            await interaction.response.send_message(f"❌ Select exactly {self.required_count} numbers!", ephemeral=True)
             return
         modal = BetAmountModal(self.parent_view, self.bet_type, self.selected_numbers)
         await interaction.response.send_modal(modal)
+    
+    async def cancel(self, interaction: discord.Interaction):
+        await interaction.response.edit_message(content="❌ Bet cancelled.", view=None)
 
 class RouletteView(View):
     def __init__(self, user_id):
         super().__init__(timeout=300)
         self.user_id = str(user_id)
+        self.current_bet_amount = None
+        self.current_bet_type = None
+        self.current_bet_choice = None
 
     async def spin(self, interaction: discord.Interaction, bet_type=None, bet_choice=None, bet_amount=None):
         await interaction.response.defer()
@@ -563,20 +640,69 @@ class RouletteView(View):
 
         if bet_type and bet_amount:
             if account["balance"] < bet_amount:
-                await interaction.followup.send("Not enough balance!", ephemeral=True)
+                await interaction.followup.send("❌ Not enough balance!", ephemeral=True)
                 return
             account["balance"] -= bet_amount
             save_economy(data)
+            self.current_bet_amount = bet_amount
+            self.current_bet_type = bet_type
+            self.current_bet_choice = bet_choice
 
+        # ============ ANIMATION ============
+        anim_frames = [
+            "🎡 **━━━━━━━ ROULETTE ━━━━━━━** 🎡\n\n"
+            "🔴 ⚫ 🔴 ⚫ 🔴 ⚫ 🔴 ⚫\n"
+            "⚫ 🔴 ⚫ 🔴 ⚫ 🔴 ⚫ 🔴\n"
+            "🔴 ⚫ 🔴 ⚫ 🔴 ⚫ 🔴 ⚫\n"
+            "⚫ 🔴 ⚫ 🔴 ⚫ 🔴 ⚫ 🔴\n\n"
+            "**🏀 Ball is spinning...**",
+            
+            "🎡 **━━━━━━━ ROULETTE ━━━━━━━** 🎡\n\n"
+            "⚫ 🔴 ⚫ 🔴 ⚫ 🔴 ⚫ 🔴\n"
+            "🔴 ⚫ 🔴 ⚫ 🔴 ⚫ 🔴 ⚫\n"
+            "⚫ 🔴 ⚫ 🔴 ⚫ 🔴 ⚫ 🔴\n"
+            "🔴 ⚫ 🔴 ⚫ 🔴 ⚫ 🔴 ⚫\n\n"
+            "**🏀⚡ Ball is spinning faster...**",
+            
+            "🎡 **━━━━━━━ ROULETTE ━━━━━━━** 🎡\n\n"
+            "🔴 ⚫ 🔴 ⚫ 🔴 ⚫ 🔴 ⚫\n"
+            "⚫ 🔴 ⚫ 🔴 ⚫ 🔴 ⚫ 🔴\n"
+            "🔴 ⚫ 🔴 ⚫ 🔴 ⚫ 🔴 ⚫\n"
+            "⚫ 🔴 ⚫ 🔴 ⚫ 🔴 ⚫ 🔴\n\n"
+            "**🏀⚡⚡ Almost there...**",
+            
+            "🎡 **━━━━━━━ ROULETTE ━━━━━━━** 🎡\n\n"
+            "⚫ 🔴 ⚫ 🔴 ⚫ 🔴 ⚫ 🔴\n"
+            "🔴 ⚫ 🔴 ⚫ 🔴 ⚫ 🔴 ⚫\n"
+            "⚫ 🔴 ⚫ 🔴 ⚫ 🔴 ⚫ 🔴\n"
+            "🔴 ⚫ 🔴 ⚫ 🔴 ⚫ 🔴 ⚫\n\n"
+            "**🏀🎯 Ball is slowing down...**",
+        ]
+
+        # Send initial animation
+        anim_msg = await interaction.followup.send(anim_frames[0])
+        
+        # Play animation
+        for i in range(1, len(anim_frames)):
+            await asyncio.sleep(0.4)
+            await anim_msg.edit(content=anim_frames[i])
+        
+        await asyncio.sleep(0.3)
+        
+        # ============ GET RESULT ============
         numbers = list(range(37)) + ["00"]
         result = random.choice(numbers)
         color = check_color(result)
-
+        
+        # Calculate win/loss
         win = False
         payout = 0
-        outcome_text = "No bet placed."
-
-        if bet_type and bet_amount:
+        
+        if self.current_bet_type and self.current_bet_amount:
+            bet_type = self.current_bet_type
+            bet_choice = self.current_bet_choice
+            bet_amount = self.current_bet_amount
+            
             if bet_type in ["single", "split", "street", "corner", "six_line"]:
                 if str(result) in bet_choice:
                     win = True
@@ -584,24 +710,26 @@ class RouletteView(View):
             elif bet_type == "red_black" and bet_choice.lower() == color:
                 win = True
                 multiplier = 1
-            elif bet_type == "even_odd" and result not in ["0","00"]:
-                if (bet_choice.lower() == "even" and int(result) % 2 == 0) or (bet_choice.lower() == "odd" and int(result) % 2 == 1):
+            elif bet_type == "even_odd" and result not in ["0", "00"]:
+                if (bet_choice.lower() == "even" and int(result) % 2 == 0) or \
+                   (bet_choice.lower() == "odd" and int(result) % 2 == 1):
                     win = True
                 multiplier = 1
-            elif bet_type == "low_high" and result not in ["0","00"]:
-                if (bet_choice.lower() == "low" and 1 <= int(result) <= 18) or (bet_choice.lower() == "high" and 19 <= int(result) <= 36):
+            elif bet_type == "low_high" and result not in ["0", "00"]:
+                if (bet_choice.lower() == "low" and 1 <= int(result) <= 18) or \
+                   (bet_choice.lower() == "high" and 19 <= int(result) <= 36):
                     win = True
                 multiplier = 1
-            elif bet_type == "dozen" and result not in ["0","00"]:
-                dozens = {"1st": range(1,13), "2nd": range(13,25), "3rd": range(25,37)}
+            elif bet_type == "dozen" and result not in ["0", "00"]:
+                dozens = {"1st": range(1, 13), "2nd": range(13, 25), "3rd": range(25, 37)}
                 if int(result) in dozens[bet_choice]:
                     win = True
                 multiplier = 2
-            elif bet_type == "column" and result not in ["0","00"]:
+            elif bet_type == "column" and result not in ["0", "00"]:
                 columns = {
-                    "1st": {1,4,7,10,13,16,19,22,25,28,31,34},
-                    "2nd": {2,5,8,11,14,17,20,23,26,29,32,35},
-                    "3rd": {3,6,9,12,15,18,21,24,27,30,33,36}
+                    "1st": {1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34},
+                    "2nd": {2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35},
+                    "3rd": {3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36}
                 }
                 if int(result) in columns[bet_choice]:
                     win = True
@@ -611,128 +739,203 @@ class RouletteView(View):
                 payout = bet_amount * multiplier
                 account["balance"] += payout
                 account["total_won"] += payout
-                outcome_text = f"🎉 Won {payout} PNG!"
+                outcome_text = f"🎉 **WIN!** +{payout} PNG"
+                color_theme = discord.Color.gold()
                 save_economy(data)
             else:
                 account["total_lost"] += bet_amount
-                outcome_text = f"💀 Lost {bet_amount} PNG."
+                outcome_text = f"💀 **LOST** -{bet_amount} PNG"
+                color_theme = discord.Color.red()
                 save_economy(data)
+        else:
+            outcome_text = "ℹ️ No bet placed"
+            color_theme = discord.Color.blue()
 
+        # Reset current bet
+        self.current_bet_amount = None
+        self.current_bet_type = None
+        self.current_bet_choice = None
+
+        # Update inactivity counter
         if self.user_id in ACTIVE_SESSIONS:
             ACTIVE_SESSIONS[self.user_id]["inactive_rounds"] = 0
 
-        embed = discord.Embed(title="🎡 Roulette", color=discord.Color.random())
-        embed.add_field(name="Player", value=interaction.user.mention)
-        embed.add_field(name="Result", value=f"{result} ({color})")
-        embed.add_field(name="Outcome", value=outcome_text)
-        embed.set_footer(text=f"Balance: {account['balance']} PNG")
+        # ============ FINAL EMBED ============
+        table = create_roulette_table(result, color)
         
-        await interaction.followup.send(embed=embed, view=self)
+        embed = discord.Embed(
+            title="🎡 **ROULETTE RESULT** 🎡",
+            color=color_theme,
+            description=f"```\n{table}\n```"
+        )
+        
+        # Bet info
+        bet_info = f"**{bet_amount} PNG**" if self.current_bet_amount else "None"
+        bet_type_display = self.current_bet_type.replace("_", " ").title() if self.current_bet_type else "-"
+        
+        embed.add_field(name="👤 Player", value=interaction.user.mention, inline=True)
+        embed.add_field(name="💰 Bet", value=bet_info, inline=True)
+        embed.add_field(name="🎯 Type", value=bet_type_display, inline=True)
+        embed.add_field(name="📊 Result", value=f"**{result}** • {color.upper()}", inline=True)
+        embed.add_field(name="💸 Outcome", value=outcome_text, inline=True)
+        embed.add_field(name="💎 Balance", value=f"{account['balance']} PNG", inline=True)
+        
+        embed.set_footer(text="Click buttons to bet again • Stay or Leave to continue")
+        
+        await anim_msg.edit(content=None, embed=embed, view=self)
 
-    @discord.ui.button(label="Red", style=discord.ButtonStyle.danger, row=0)
+    # ============ BUTTONS ============
+    @discord.ui.button(label="🔴 RED", style=discord.ButtonStyle.danger, row=0)
     async def red(self, interaction, button: Button):
         modal = BetAmountModal(self, "red_black", "red")
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Black", style=discord.ButtonStyle.secondary, row=0)
+    @discord.ui.button(label="⚫ BLACK", style=discord.ButtonStyle.secondary, row=0)
     async def black(self, interaction, button: Button):
         modal = BetAmountModal(self, "red_black", "black")
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Even", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="👥 EVEN", style=discord.ButtonStyle.primary, row=0)
     async def even(self, interaction, button: Button):
         modal = BetAmountModal(self, "even_odd", "even")
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Odd", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="🥇 ODD", style=discord.ButtonStyle.primary, row=0)
     async def odd(self, interaction, button: Button):
         modal = BetAmountModal(self, "even_odd", "odd")
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Low 1-18", style=discord.ButtonStyle.success, row=1)
+    @discord.ui.button(label="⬇️ LOW (1-18)", style=discord.ButtonStyle.success, row=1)
     async def low(self, interaction, button: Button):
         modal = BetAmountModal(self, "low_high", "low")
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="High 19-36", style=discord.ButtonStyle.success, row=1)
+    @discord.ui.button(label="⬆️ HIGH (19-36)", style=discord.ButtonStyle.success, row=1)
     async def high(self, interaction, button: Button):
         modal = BetAmountModal(self, "low_high", "high")
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="1st Dozen", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="1st 12", style=discord.ButtonStyle.secondary, row=1)
     async def first_dozen(self, interaction, button: Button):
         modal = BetAmountModal(self, "dozen", "1st")
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="2nd Dozen", style=discord.ButtonStyle.secondary, row=1)
+    @discord.ui.button(label="2nd 12", style=discord.ButtonStyle.secondary, row=1)
     async def second_dozen(self, interaction, button: Button):
         modal = BetAmountModal(self, "dozen", "2nd")
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="3rd Dozen", style=discord.ButtonStyle.secondary, row=2)
+    @discord.ui.button(label="3rd 12", style=discord.ButtonStyle.secondary, row=2)
     async def third_dozen(self, interaction, button: Button):
         modal = BetAmountModal(self, "dozen", "3rd")
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="1st Column", style=discord.ButtonStyle.primary, row=2)
+    @discord.ui.button(label="1st COL", style=discord.ButtonStyle.primary, row=2)
     async def col1(self, interaction, button: Button):
         modal = BetAmountModal(self, "column", "1st")
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="2nd Column", style=discord.ButtonStyle.primary, row=2)
+    @discord.ui.button(label="2nd COL", style=discord.ButtonStyle.primary, row=2)
     async def col2(self, interaction, button: Button):
         modal = BetAmountModal(self, "column", "2nd")
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="3rd Column", style=discord.ButtonStyle.primary, row=2)
+    @discord.ui.button(label="3rd COL", style=discord.ButtonStyle.primary, row=2)
     async def col3(self, interaction, button: Button):
         modal = BetAmountModal(self, "column", "3rd")
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Single", style=discord.ButtonStyle.danger, row=3)
+    @discord.ui.button(label="🎯 SINGLE", style=discord.ButtonStyle.danger, row=3)
     async def single(self, interaction, button: Button):
-        await interaction.response.send_message("Select 1 number:", ephemeral=True, view=MultiNumberButtonView(self, "single", 1))
+        await interaction.response.send_message(
+            "**Select 1 number:**", 
+            ephemeral=True, 
+            view=MultiNumberButtonView(self, "single", 1)
+        )
 
-    @discord.ui.button(label="Split", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label="🔀 SPLIT", style=discord.ButtonStyle.secondary, row=3)
     async def split(self, interaction, button: Button):
-        await interaction.response.send_message("Select 2 numbers:", ephemeral=True, view=MultiNumberButtonView(self, "split", 2))
+        await interaction.response.send_message(
+            "**Select 2 numbers:**", 
+            ephemeral=True, 
+            view=MultiNumberButtonView(self, "split", 2)
+        )
 
-    @discord.ui.button(label="Street", style=discord.ButtonStyle.secondary, row=3)
+    @discord.ui.button(label="📊 STREET", style=discord.ButtonStyle.secondary, row=3)
     async def street(self, interaction, button: Button):
-        await interaction.response.send_message("Select 3 numbers:", ephemeral=True, view=MultiNumberButtonView(self, "street", 3))
+        await interaction.response.send_message(
+            "**Select 3 numbers:**", 
+            ephemeral=True, 
+            view=MultiNumberButtonView(self, "street", 3)
+        )
 
-    @discord.ui.button(label="Corner", style=discord.ButtonStyle.secondary, row=4)
+    @discord.ui.button(label="🔲 CORNER", style=discord.ButtonStyle.secondary, row=4)
     async def corner(self, interaction, button: Button):
-        await interaction.response.send_message("Select 4 numbers:", ephemeral=True, view=MultiNumberButtonView(self, "corner", 4))
+        await interaction.response.send_message(
+            "**Select 4 numbers:**", 
+            ephemeral=True, 
+            view=MultiNumberButtonView(self, "corner", 4)
+        )
 
-    @discord.ui.button(label="Six-line", style=discord.ButtonStyle.secondary, row=4)
+    @discord.ui.button(label="📏 SIX-LINE", style=discord.ButtonStyle.secondary, row=4)
     async def six_line(self, interaction, button: Button):
-        await interaction.response.send_message("Select 6 numbers:", ephemeral=True, view=MultiNumberButtonView(self, "six_line", 6))
+        await interaction.response.send_message(
+            "**Select 6 numbers:**", 
+            ephemeral=True, 
+            view=MultiNumberButtonView(self, "six_line", 6)
+        )
 
-    @discord.ui.button(label="Stay", style=discord.ButtonStyle.primary, row=4)
+    @discord.ui.button(label="🛑 STAY", style=discord.ButtonStyle.primary, row=4)
     async def stay(self, interaction, button: Button):
         if self.user_id in ACTIVE_SESSIONS:
             ACTIVE_SESSIONS[self.user_id]["inactive_rounds"] = 0
-        await interaction.response.send_message("👍 Staying at table.", ephemeral=True)
+        await interaction.response.send_message("👍 Staying at the table!", ephemeral=True)
 
-    @discord.ui.button(label="Leave", style=discord.ButtonStyle.danger, row=4)
+    @discord.ui.button(label="🚪 LEAVE", style=discord.ButtonStyle.danger, row=4)
     async def leave(self, interaction, button: Button):
         ACTIVE_SESSIONS.pop(self.user_id, None)
-        await interaction.response.send_message("👋 Left table.", ephemeral=True)
+        await interaction.response.send_message("👋 You left the table. Come back anytime!", ephemeral=True)
         self.stop()
 
-@bot.tree.command(name="roulette", description="Join the roulette table!", guild=guild)
+@bot.tree.command(name="roulette", description="🎡 Join the roulette table and place your bets!", guild=guild)
 async def roulette_cmd(interaction: discord.Interaction):
     await interaction.response.defer()
     user_id = str(interaction.user.id)
+    
     if user_id not in ACTIVE_SESSIONS:
         ACTIVE_SESSIONS[user_id] = {"inactive_rounds": 0}
     
     data, account = get_account(interaction.user.id)
-    embed = discord.Embed(title="🎡 PNG Roulette", color=discord.Color.green())
-    embed.add_field(name="Player", value=interaction.user.mention)
-    embed.add_field(name="Balance", value=f"{account['balance']} PNG")
-    embed.add_field(name="Payouts", value="Single: 35x\nSplit: 17x\nStreet: 11x\nCorner: 8x\nSix-line: 5x\nColumn/Dozen: 2x\nOthers: 1x", inline=False)
+    
+    embed = discord.Embed(
+        title="🎡 **PNG CASINO - ROULETTE** 🎡",
+        color=discord.Color.green(),
+        description=(
+            "```\n"
+            "╔════════════════════════════════════════╗\n"
+            "║     Welcome to the Roulette Table!     ║\n"
+            "║    Click buttons below to place bets   ║\n"
+            "╚════════════════════════════════════════╝\n"
+            "```"
+        )
+    )
+    
+    embed.add_field(name="👤 Player", value=interaction.user.mention, inline=True)
+    embed.add_field(name="💰 Balance", value=f"{account['balance']} PNG", inline=True)
+    embed.add_field(name="🎯 Min Bet", value=f"{MIN_BET_ROULETTE} PNG", inline=True)
+    
+    payouts = (
+        "**Single:** 35x\n"
+        "**Split:** 17x\n"
+        "**Street:** 11x\n"
+        "**Corner:** 8x\n"
+        "**Six-line:** 5x\n"
+        "**Column/Dozen:** 2x\n"
+        "**Red/Black/Even/Odd/Low/High:** 1x"
+    )
+    embed.add_field(name="💰 Payouts", value=payouts, inline=False)
+    
+    embed.set_footer(text="Place your bets and watch the wheel spin! 🎡")
     
     await interaction.followup.send(embed=embed, view=RouletteView(user_id))
 
@@ -743,8 +946,10 @@ async def check_inactive_sessions():
         sess["inactive_rounds"] += 1
         if sess["inactive_rounds"] >= 3:
             to_remove.append(user_id)
+    
     for user_id in to_remove:
         ACTIVE_SESSIONS.pop(user_id, None)
+        print(f"👋 Removed inactive roulette player {user_id}")
 
 # ================= LEADERBOARD COINS =================
 @bot.tree.command(name="leaderboardcoins", description="Top richest players", guild=guild)
@@ -883,27 +1088,6 @@ async def resetmonth(interaction: discord.Interaction, month: str = None):
         await interaction.followup.send(f"⚠️ {interaction.user.mention} reset all data for **{month_key}**.")
     else:
         await interaction.followup.send(f"No data found for {month_key}.")
-
-@bot.tree.command(name="storage", description="Check GitHub storage status (Authorized only)", guild=guild)
-async def storage_status(interaction: discord.Interaction):
-    if not is_authorized(interaction.user.id):
-        await interaction.response.send_message("❌ Not authorized.", ephemeral=True)
-        return
-    
-    await interaction.response.defer()
-    
-    status = f"**Storage Mode:** {'GitHub' if storage.is_production and storage.token else 'Local'}\n"
-    if storage.is_production and storage.token:
-        status += f"**Repo:** {storage.repo}\n"
-        status += f"**Auto-save:** {'Running' if storage.auto_save.is_running() else 'Stopped'}\n"
-        status += f"**Pending Saves:** {storage.pending_saves}\n"
-        
-        econ = storage.get_economy()
-        lb = storage.get_leaderboard()
-        status += f"**Economy Accounts:** {len(econ.get('users', {}))}\n"
-        status += f"**Leaderboard Months:** {len(lb)}\n"
-    
-    await interaction.followup.send(status)
 
 # ================= FLASK KEEP-ALIVE =================
 app = Flask("")
