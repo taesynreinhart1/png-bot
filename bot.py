@@ -290,7 +290,7 @@ async def on_ready():
 BLACKJACK_MIN_BET = 10
 BLACKJACK_MAX_BET = 1000
 BLACKJACK_PAYOUT = 2  # 2x for normal win
-BLACKJACK_BLACKJACK_PAYOUT = 3  # 3x for blackjack (usually 2.5x but 3x for simplicity)
+BLACKJACK_BLACKJACK_PAYOUT = 3  # 3x for blackjack
 
 # Card values
 CARD_VALUES = {
@@ -315,7 +315,8 @@ class BlackjackGame:
         self.game_over = False
         self.result = None
         self.payout = 0
-        self.message = None  # Store the game message for updates
+        self.message = None
+        self.blackjack = False
         
     def create_deck(self):
         """Create a standard 52-card deck"""
@@ -331,14 +332,13 @@ class BlackjackGame:
         aces = 0
         
         for card in hand:
-            card_value = card[:-1]  # Remove suit
+            card_value = card[:-1]
             if card_value == 'A':
                 aces += 1
                 score += 11
             else:
                 score += CARD_VALUES[card_value]
         
-        # Adjust for aces if bust
         while score > 21 and aces > 0:
             score -= 10
             aces -= 1
@@ -354,7 +354,8 @@ class BlackjackGame:
     def format_hand(self, hand, hide_first=False):
         """Format hand for display with emojis"""
         if hide_first and len(hand) > 0:
-            return f"?? {hand[1]}" if len(hand) > 1 else "??"
+            hidden_hand = ["??"] + hand[1:]
+            return " ".join(hidden_hand)
         else:
             return " ".join(hand)
     
@@ -369,15 +370,18 @@ class BlackjackGame:
     
     def start_game(self):
         """Start a new blackjack game"""
-        # Deal initial cards
         self.deal_card(self.player_hand)
         self.deal_card(self.dealer_hand)
         self.deal_card(self.player_hand)
         self.deal_card(self.dealer_hand)
         
-        # Calculate scores
         self.player_score = self.calculate_score(self.player_hand)
-        self.dealer_score = self.calculate_score([self.dealer_hand[0]])  # Only first card visible
+        self.dealer_score = self.calculate_score([self.dealer_hand[0]])
+        
+        # Check for player blackjack
+        if self.player_score == 21:
+            self.blackjack = True
+            self.stand()  # Auto-stand on blackjack
     
     def hit(self):
         """Player hits - take another card"""
@@ -387,13 +391,11 @@ class BlackjackGame:
         self.deal_card(self.player_hand)
         self.player_score = self.calculate_score(self.player_hand)
         
-        # Check if bust
         if self.player_score > 21:
             self.game_over = True
             self.result = "bust"
             self.payout = 0
         elif self.player_score == 21:
-            # Auto-stand on 21
             self.stand()
             
         return True
@@ -403,10 +405,8 @@ class BlackjackGame:
         if self.game_over:
             return
         
-        # Reveal dealer's full hand
         self.dealer_score = self.calculate_score(self.dealer_hand)
         
-        # Dealer draws to 17 or higher
         while self.dealer_score < 17:
             self.deal_card(self.dealer_hand)
             self.dealer_score = self.calculate_score(self.dealer_hand)
@@ -416,33 +416,37 @@ class BlackjackGame:
         # Determine winner
         if self.dealer_score > 21:
             self.result = "dealer_bust"
-            self.payout = self.bet_amount * 2  # Win
+            if self.blackjack:
+                self.payout = int(self.bet_amount * 2.5)  # Blackjack pays 3:2
+            else:
+                self.payout = self.bet_amount * 2
         elif self.dealer_score > self.player_score:
             self.result = "loss"
             self.payout = 0
         elif self.dealer_score < self.player_score:
             self.result = "win"
-            self.payout = self.bet_amount * 2
+            if self.blackjack:
+                self.payout = int(self.bet_amount * 2.5)  # Blackjack pays 3:2
+            else:
+                self.payout = self.bet_amount * 2
         else:
             self.result = "push"
-            self.payout = self.bet_amount  # Return bet
+            self.payout = self.bet_amount
     
     def create_embed(self, interaction, account, game_started=False):
         """Create the game embed"""
         
-        # Determine title based on game state
         if self.game_over:
             title = "🎰 **BLACKJACK - GAME OVER** 🎰"
+            color = discord.Color.gold() if self.payout > self.bet_amount else discord.Color.red()
         elif game_started:
             title = "🎰 **BLACKJACK - IN PROGRESS** 🎰"
+            color = discord.Color.green()
         else:
             title = "🎰 **BLACKJACK - NEW GAME** 🎰"
+            color = discord.Color.blue()
         
-        # Create embed
-        embed = discord.Embed(
-            title=title,
-            color=discord.Color.green() if not self.game_over else discord.Color.gold()
-        )
+        embed = discord.Embed(title=title, color=color)
         
         # Player info
         embed.add_field(name="👤 Player", value=interaction.user.mention, inline=True)
@@ -453,13 +457,18 @@ class BlackjackGame:
         if self.player_hand:
             player_hand_display = self.format_hand(self.player_hand)
             player_score_display = self.get_hand_value_with_emoji(self.player_score)
+            
+            # Add blackjack indicator
+            if self.blackjack and not self.game_over:
+                hand_title = f"🃏 **YOUR HAND** {player_score_display} 🎉 **BLACKJACK!**"
+            else:
+                hand_title = f"🃏 **YOUR HAND** {player_score_display}"
+            
             embed.add_field(
-                name=f"🃏 **YOUR HAND** ({player_score_display})",
+                name=hand_title,
                 value=f"```\n{player_hand_display}\n```",
                 inline=False
             )
-        else:
-            embed.add_field(name="🃏 **YOUR HAND**", value="Waiting...", inline=False)
         
         # Dealer hand
         if self.dealer_hand:
@@ -473,43 +482,44 @@ class BlackjackGame:
                 dealer_score_display = self.get_hand_value_with_emoji(self.dealer_score)
             
             embed.add_field(
-                name=f"🤵 **DEALER** ({dealer_score_display})",
+                name=f"🤵 **DEALER** {dealer_score_display}",
                 value=f"```\n{dealer_hand_display}\n```",
                 inline=False
             )
-        else:
-            embed.add_field(name="🤵 **DEALER**", value="Waiting...", inline=False)
         
         # Result if game over
         if self.game_over:
             if self.result == "bust":
                 result_text = f"💥 **BUST!** You lost {self.bet_amount} PNG"
-                embed.color = discord.Color.red()
             elif self.result == "dealer_bust":
-                result_text = f"🎉 **DEALER BUST!** You won {self.bet_amount} PNG!"
-                embed.color = discord.Color.gold()
+                if self.blackjack:
+                    profit = self.payout - self.bet_amount
+                    result_text = f"🎉 **BLACKJACK!** Dealer bust! +{profit} PNG!"
+                else:
+                    result_text = f"🎉 **DEALER BUST!** You won {self.bet_amount} PNG!"
             elif self.result == "win":
-                result_text = f"🎉 **YOU WIN!** +{self.bet_amount} PNG!"
-                embed.color = discord.Color.gold()
+                if self.blackjack:
+                    profit = self.payout - self.bet_amount
+                    result_text = f"🎉 **BLACKJACK!** +{profit} PNG!"
+                else:
+                    result_text = f"🎉 **YOU WIN!** +{self.bet_amount} PNG!"
             elif self.result == "loss":
                 result_text = f"💀 **DEALER WINS!** Lost {self.bet_amount} PNG"
-                embed.color = discord.Color.red()
             elif self.result == "push":
                 result_text = f"🤝 **PUSH!** Bet returned: {self.bet_amount} PNG"
-                embed.color = discord.Color.blue()
             
             embed.add_field(name="📊 **RESULT**", value=result_text, inline=False)
         
         # Instructions
-        if not self.game_over and game_started:
-            embed.set_footer(text="🎯 Hit • 🛑 Stand")
+        if not self.game_over and game_started and not self.blackjack:
+            embed.set_footer(text="🎯 Hit • 🛑 Stand • 🏃 Forfeit")
         elif not self.game_over and not game_started:
-            embed.set_footer(text="💰 Enter your bet amount to start!")
+            embed.set_footer(text="💰 Click PLACE BET to start!")
         
         return embed
 
 # Store active blackjack games
-ACTIVE_BLACKJACK_GAMES = {}  # {user_id: BlackjackGame}
+ACTIVE_BLACKJACK_GAMES = {}
 
 class BlackjackBetModal(Modal, title="💰 Place Your Blackjack Bet"):
     def __init__(self):
@@ -522,10 +532,13 @@ class BlackjackBetModal(Modal, title="💰 Place Your Blackjack Bet"):
         self.add_item(self.bet)
     
     async def on_submit(self, interaction: discord.Interaction):
+        # DEFER FIRST to prevent "interaction failed"
+        await interaction.response.defer()
+        
         try:
             bet_amount = int(self.bet.value)
             if bet_amount < BLACKJACK_MIN_BET or bet_amount > BLACKJACK_MAX_BET:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"❌ Bet must be between {BLACKJACK_MIN_BET} and {BLACKJACK_MAX_BET} PNG!",
                     ephemeral=True
                 )
@@ -534,7 +547,7 @@ class BlackjackBetModal(Modal, title="💰 Place Your Blackjack Bet"):
             # Check balance
             data, account = get_account(interaction.user.id)
             if account["balance"] < bet_amount:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"❌ You only have {account['balance']} PNG!",
                     ephemeral=True
                 )
@@ -553,20 +566,18 @@ class BlackjackBetModal(Modal, title="💰 Place Your Blackjack Bet"):
             
             # Create and send embed
             embed = game.create_embed(interaction, account, game_started=True)
-            
-            # Create view with Hit/Stand buttons
             view = BlackjackView(game)
             
-            # Send message and store it
-            await interaction.response.send_message(embed=embed, view=view)
+            # Send the game message
+            await interaction.followup.send(embed=embed, view=view)
             game.message = await interaction.original_response()
             
         except ValueError:
-            await interaction.response.send_message("❌ Enter a valid number!", ephemeral=True)
+            await interaction.followup.send("❌ Enter a valid number!", ephemeral=True)
 
 class BlackjackView(View):
     def __init__(self, game):
-        super().__init__(timeout=60)
+        super().__init__(timeout=120)  # Longer timeout
         self.game = game
     
     async def update_game_message(self, interaction, account):
@@ -574,7 +585,7 @@ class BlackjackView(View):
         embed = self.game.create_embed(interaction, account, game_started=True)
         
         if self.game.game_over:
-            # Game over - remove buttons
+            # Game over - remove buttons but keep message
             await interaction.response.edit_message(embed=embed, view=None)
             
             # Remove from active games
@@ -585,27 +596,21 @@ class BlackjackView(View):
                 data, account = get_account(int(self.game.player_id))
                 account["balance"] += self.game.payout
                 save_economy(data)
-                
-                # Send follow-up with winnings
-                if self.game.payout > self.game.bet_amount:
-                    await interaction.followup.send(
-                        f"🎉 **+{self.game.payout - self.game.bet_amount} PNG!**",
-                        ephemeral=True
-                    )
         else:
             # Game ongoing - update with same view
             await interaction.response.edit_message(embed=embed, view=self)
     
-    @discord.ui.button(label="🎯 HIT", style=discord.ButtonStyle.primary, emoji="🃏")
+    @discord.ui.button(label="🎯 HIT", style=discord.ButtonStyle.primary, emoji="🃏", row=0)
     async def hit(self, interaction: discord.Interaction, button: Button):
         # Verify this is the right player
         if str(interaction.user.id) != self.game.player_id:
             await interaction.response.send_message("❌ This isn't your game!", ephemeral=True)
             return
         
-        # Check if game is over
+        await interaction.response.defer()
+        
         if self.game.game_over:
-            await interaction.response.send_message("❌ Game is already over!", ephemeral=True)
+            await interaction.followup.send("❌ Game is already over!", ephemeral=True)
             return
         
         # Hit
@@ -617,16 +622,17 @@ class BlackjackView(View):
         # Update message
         await self.update_game_message(interaction, account)
     
-    @discord.ui.button(label="🛑 STAND", style=discord.ButtonStyle.secondary, emoji="✋")
+    @discord.ui.button(label="🛑 STAND", style=discord.ButtonStyle.secondary, emoji="✋", row=0)
     async def stand(self, interaction: discord.Interaction, button: Button):
         # Verify this is the right player
         if str(interaction.user.id) != self.game.player_id:
             await interaction.response.send_message("❌ This isn't your game!", ephemeral=True)
             return
         
-        # Check if game is over
+        await interaction.response.defer()
+        
         if self.game.game_over:
-            await interaction.response.send_message("❌ Game is already over!", ephemeral=True)
+            await interaction.followup.send("❌ Game is already over!", ephemeral=True)
             return
         
         # Stand
@@ -638,12 +644,14 @@ class BlackjackView(View):
         # Update message
         await self.update_game_message(interaction, account)
     
-    @discord.ui.button(label="❌ FORFEIT", style=discord.ButtonStyle.danger, emoji="🏃")
+    @discord.ui.button(label="🏃 FORFEIT", style=discord.ButtonStyle.danger, emoji="❌", row=0)
     async def forfeit(self, interaction: discord.Interaction, button: Button):
         # Verify this is the right player
         if str(interaction.user.id) != self.game.player_id:
             await interaction.response.send_message("❌ This isn't your game!", ephemeral=True)
             return
+        
+        await interaction.response.defer()
         
         # End game as loss
         self.game.game_over = True
@@ -655,12 +663,25 @@ class BlackjackView(View):
         
         # Update message with forfeit result
         embed = self.game.create_embed(interaction, account, game_started=True)
-        await interaction.response.edit_message(embed=embed, view=None)
+        await interaction.followup.edit_message(embed=embed, view=None)
         
         # Remove from active games
         ACTIVE_BLACKJACK_GAMES.pop(self.game.player_id, None)
         
         await interaction.followup.send("🏃 You forfeited the game.", ephemeral=True)
+
+class BlackjackStartView(View):
+    def __init__(self):
+        super().__init__(timeout=60)
+    
+    @discord.ui.button(label="💰 PLACE BET", style=discord.ButtonStyle.success, emoji="🎰", row=0)
+    async def place_bet(self, interaction: discord.Interaction, button: Button):
+        modal = BlackjackBetModal()
+        await interaction.response.send_modal(modal)
+    
+    @discord.ui.button(label="❌ CANCEL", style=discord.ButtonStyle.danger, emoji="✖️", row=0)
+    async def cancel(self, interaction: discord.Interaction, button: Button):
+        await interaction.response.edit_message(content="❌ Blackjack cancelled.", embed=None, view=None)
 
 @bot.tree.command(name="blackjack", description="🎰 Play blackjack against the dealer!", guild=guild)
 async def blackjack(interaction: discord.Interaction):
@@ -681,7 +702,7 @@ async def blackjack(interaction: discord.Interaction):
     data, account = get_account(interaction.user.id)
     
     # Create initial embed
-    game = BlackjackGame(interaction.user.id, 0)  # Temp game just for embed
+    game = BlackjackGame(interaction.user.id, 0)
     embed = game.create_embed(interaction, account, game_started=False)
     
     # Create view with bet button
@@ -689,21 +710,6 @@ async def blackjack(interaction: discord.Interaction):
     
     await interaction.followup.send(embed=embed, view=view)
 
-class BlackjackStartView(View):
-    def __init__(self):
-        super().__init__(timeout=60)
-    
-    @discord.ui.button(label="💰 PLACE BET", style=discord.ButtonStyle.success, emoji="🎰")
-    async def place_bet(self, interaction: discord.Interaction, button: Button):
-        # Open bet modal
-        modal = BlackjackBetModal()
-        await interaction.response.send_modal(modal)
-    
-    @discord.ui.button(label="❌ CANCEL", style=discord.ButtonStyle.danger, emoji="✖️")
-    async def cancel(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.edit_message(content="❌ Blackjack cancelled.", embed=None, view=None)
-
-# Clean up inactive games periodically
 @tasks.loop(minutes=5)
 async def cleanup_blackjack_games():
     """Remove inactive blackjack games"""
@@ -714,7 +720,7 @@ async def cleanup_blackjack_games():
     
     for user_id in to_remove:
         ACTIVE_BLACKJACK_GAMES.pop(user_id, None)
-        
+        print(f"🧹 Cleaned up blackjack game for {user_id}")
 # ================= BALANCE =================
 @bot.tree.command(name="balance", description="Check your PNG balance", guild=guild)
 async def balance(interaction: discord.Interaction):
@@ -922,9 +928,6 @@ async def slots(interaction: discord.Interaction, bet: int):
     await interaction.followup.send(embed=embed)
 
 # ================= ROULETTE =================
-import asyncio
-import math
-
 MIN_BET_ROULETTE = 10
 MAX_BET_ROULETTE = 10000
 RED_NUMBERS = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
@@ -957,31 +960,32 @@ def number_to_emoji(num):
 def create_spinner_animation(ball_position):
     """Create a roulette wheel spinner with ball at specific position"""
     
-    # Define the wheel layout (simplified but visually appealing)
+    # Define the wheel layout with correct colors
     wheel_segments = [
-        "0️⃣🟢", "3️⃣🔴", "6️⃣⚫", "9️⃣🔴", "1️⃣2️⃣⚫", "1️⃣5️⃣⚫", "2️⃣0️⃣⚫", "2️⃣5️⃣🔴", "3️⃣0️⃣🔴", "3️⃣5️⃣⚫",
-        "0️⃣0️⃣🟢", "2️⃣⚫", "5️⃣🔴", "8️⃣⚫", "1️⃣1️⃣⚫", "1️⃣4️⃣🔴", "1️⃣9️⃣🔴", "2️⃣4️⃣⚫", "2️⃣9️⃣⚫", "3️⃣4️⃣🔴",
-        "1️⃣🔴", "4️⃣⚫", "7️⃣🔴", "1️⃣0️⃣⚫", "1️⃣3️⃣⚫", "1️⃣8️⃣🔴", "2️⃣3️⃣🔴", "2️⃣8️⃣⚫", "3️⃣3️⃣⚫", "3️⃣6️⃣🔴"
+        ("0", "🟢"), ("32", "🔴"), ("15", "⚫"), ("19", "🔴"), ("4", "⚫"), ("21", "🔴"), ("2", "⚫"), ("25", "🔴"), ("17", "⚫"), ("34", "🔴"),
+        ("6", "⚫"), ("27", "🔴"), ("13", "⚫"), ("36", "🔴"), ("11", "⚫"), ("30", "🔴"), ("8", "⚫"), ("23", "🔴"), ("10", "⚫"), ("5", "🔴"),
+        ("24", "⚫"), ("16", "🔴"), ("33", "⚫"), ("1", "🔴"), ("20", "⚫"), ("14", "🔴"), ("31", "⚫"), ("9", "🔴"), ("22", "⚫"), ("18", "🔴"),
+        ("29", "⚫"), ("7", "🔴"), ("28", "⚫"), ("12", "🔴"), ("35", "⚫"), ("3", "🔴"), ("26", "⚫"), ("00", "🟢")
     ]
     
     # Create a visual wheel with ball at current position
     wheel = []
-    for i, segment in enumerate(wheel_segments):
+    for i, (num, color) in enumerate(wheel_segments):
         if i == ball_position % len(wheel_segments):
-            wheel.append(f"⚪{segment}")  # White ball on this segment
+            wheel.append(f"⚪{number_to_emoji(num)}{color}")  # White ball on this segment
         else:
-            wheel.append(f"  {segment}")
+            wheel.append(f"  {number_to_emoji(num)}{color}")
     
-    # Arrange in a circle (4 rows for visual appeal)
+    # Arrange in a circle (visual representation)
     circle = (
         f"```\n"
-        f"          {wheel[0]}  {wheel[1]}  {wheel[2]}          \n"
-        f"      {wheel[3]}  {wheel[4]}  {wheel[5]}  {wheel[6]}      \n"
-        f"  {wheel[7]}  {wheel[8]}  {wheel[9]}  {wheel[10]}  {wheel[11]}  \n"
-        f"  {wheel[12]}  {wheel[13]}  {wheel[14]}  {wheel[15]}  {wheel[16]}  \n"
-        f"      {wheel[17]}  {wheel[18]}  {wheel[19]}  {wheel[20]}      \n"
-        f"          {wheel[21]}  {wheel[22]}  {wheel[23]}          \n"
-        f"              {wheel[24]}              \n"
+        f"        {wheel[0]}  {wheel[1]}  {wheel[2]}  {wheel[3]}        \n"
+        f"    {wheel[4]}  {wheel[5]}  {wheel[6]}  {wheel[7]}  {wheel[8]}    \n"
+        f"  {wheel[9]}  {wheel[10]}  {wheel[11]}  {wheel[12]}  {wheel[13]}  \n"
+        f"  {wheel[14]}  {wheel[15]}  {wheel[16]}  {wheel[17]}  {wheel[18]}  \n"
+        f"    {wheel[19]}  {wheel[20]}  {wheel[21]}  {wheel[22]}  {wheel[23]}    \n"
+        f"        {wheel[24]}  {wheel[25]}  {wheel[26]}  {wheel[27]}        \n"
+        f"            {wheel[28]}  {wheel[29]}  {wheel[30]}            \n"
         f"```"
     )
     return circle
@@ -989,29 +993,29 @@ def create_spinner_animation(ball_position):
 def create_roulette_table(result, color):
     """Create a visual roulette table with the result highlighted"""
     
-    # Define the roulette layout
-    row1 = ["3", "6", "9", "12", "15", "20", "25", "30", "35"]
-    row2 = ["2", "5", "8", "11", "14", "19", "24", "29", "34"]
-    row3 = ["1", "4", "7", "10", "13", "18", "23", "28", "33"]
+    # Define the roulette layout with correct column arrangement
+    col1 = ["3", "6", "9", "12", "15", "18", "21", "24", "27", "30", "33", "36"]
+    col2 = ["2", "5", "8", "11", "14", "17", "20", "23", "26", "29", "32", "35"]
+    col3 = ["1", "4", "7", "10", "13", "16", "19", "22", "25", "28", "31", "34"]
     
-    # Convert rows to emoji with colors
-    row1_emoji = []
-    for n in row1:
+    # Format each column with colors
+    col1_display = []
+    for n in col1:
         num = int(n)
         color_emoji = "🔴" if num in RED_NUMBERS else "⚫"
-        row1_emoji.append(f"{number_to_emoji(num)}{color_emoji}")
+        col1_display.append(f"{number_to_emoji(num)}{color_emoji}")
     
-    row2_emoji = []
-    for n in row2:
+    col2_display = []
+    for n in col2:
         num = int(n)
         color_emoji = "🔴" if num in RED_NUMBERS else "⚫"
-        row2_emoji.append(f"{number_to_emoji(num)}{color_emoji}")
+        col2_display.append(f"{number_to_emoji(num)}{color_emoji}")
     
-    row3_emoji = []
-    for n in row3:
+    col3_display = []
+    for n in col3:
         num = int(n)
         color_emoji = "🔴" if num in RED_NUMBERS else "⚫"
-        row3_emoji.append(f"{number_to_emoji(num)}{color_emoji}")
+        col3_display.append(f"{number_to_emoji(num)}{color_emoji}")
     
     # Result display
     if result in [0, "00"]:
@@ -1022,34 +1026,38 @@ def create_roulette_table(result, color):
     
     # Build the table
     table = (
-        f"╔════════════════════════════════════════════╗\n"
-        f"║              🎯 **RESULT** 🎯              ║\n"
-        f"║                                           ║\n"
-        f"║              **{result_display}**              ║\n"
-        f"║                                           ║\n"
-        f"╠════════════════════════════════════════════╣\n"
-        f"║  {' '.join(row1_emoji)}  ║\n"
-        f"║  {' '.join(row2_emoji)}  ║\n"
-        f"║  {' '.join(row3_emoji)}  ║\n"
-        f"║                                           ║\n"
-        f"║          0️⃣        🟢        0️⃣0️⃣          ║\n"
-        f"╚════════════════════════════════════════════╝"
+        f"╔════════════════════════════════════════════════════════════╗\n"
+        f"║                       🎯 **RESULT** 🎯                      ║\n"
+        f"║                                                           ║\n"
+        f"║                    **{result_display}**                      ║\n"
+        f"║                                                           ║\n"
+        f"╠════════════════════════════════════════════════════════════╣\n"
+        f"║  COL 1          COL 2          COL 3                      ║\n"
+        f"║  {' '.join(col1_display[:6])}  ║\n"
+        f"║  {' '.join(col1_display[6:])}  ║\n"
+        f"║  {' '.join(col2_display[:6])}  ║\n"
+        f"║  {' '.join(col2_display[6:])}  ║\n"
+        f"║  {' '.join(col3_display[:6])}  ║\n"
+        f"║  {' '.join(col3_display[6:])}  ║\n"
+        f"║                                                           ║\n"
+        f"║                    0️⃣        🟢        0️⃣0️⃣                ║\n"
+        f"╚════════════════════════════════════════════════════════════╝"
     )
     return table
 
 class BetAmountModal(Modal, title="💰 Place Your Bet"):
-    def __init__(self, parent_view, bet_type, bet_choice=None):
+    def __init__(self, parent_view, bet_type, bet_choice):
         super().__init__()
         self.parent_view = parent_view
         self.bet_type = bet_type
         self.bet_choice = bet_choice
         
-        bet_name = bet_type.replace("_", " ").title()
-        if bet_choice:
-            if isinstance(bet_choice, list):
-                bet_name = f"{bet_type.title()} ({','.join(bet_choice[:3])}...)"
-            else:
-                bet_name = f"{bet_type.title()} {bet_choice}"
+        # Create descriptive label
+        if isinstance(bet_choice, list):
+            numbers_str = ', '.join(bet_choice)
+            bet_name = f"{bet_type.title()} on {numbers_str}"
+        else:
+            bet_name = f"{bet_type.title()} {bet_choice}"
         
         self.amount = TextInput(
             label=f"Amount for {bet_name}",
@@ -1076,19 +1084,38 @@ class MultiNumberButtonView(View):
         self.required_count = required_count
         self.selected_numbers = []
 
-        # Add number buttons in rows
-        for row in range(0, 37, 6):
-            for n in range(row, min(row + 6, 37)):
-                style = discord.ButtonStyle.danger if n in RED_NUMBERS else discord.ButtonStyle.secondary
-                btn = Button(label=str(n), style=style)
-                btn.callback = self.make_callback(str(n))
-                self.add_item(btn)
+        # Row 1: 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36
+        for n in [3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36]:
+            style = discord.ButtonStyle.danger if n in RED_NUMBERS else discord.ButtonStyle.secondary
+            btn = Button(label=str(n), style=style, row=0)
+            btn.callback = self.make_callback(str(n))
+            self.add_item(btn)
         
-        btn_00 = Button(label="00", style=discord.ButtonStyle.secondary)
+        # Row 2: 2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35
+        for n in [2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35]:
+            style = discord.ButtonStyle.danger if n in RED_NUMBERS else discord.ButtonStyle.secondary
+            btn = Button(label=str(n), style=style, row=1)
+            btn.callback = self.make_callback(str(n))
+            self.add_item(btn)
+        
+        # Row 3: 1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34
+        for n in [1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34]:
+            style = discord.ButtonStyle.danger if n in RED_NUMBERS else discord.ButtonStyle.secondary
+            btn = Button(label=str(n), style=style, row=2)
+            btn.callback = self.make_callback(str(n))
+            self.add_item(btn)
+        
+        # Row 4: 0 and 00
+        btn_0 = Button(label="0", style=discord.ButtonStyle.success, row=3)
+        btn_0.callback = self.make_callback("0")
+        self.add_item(btn_0)
+        
+        btn_00 = Button(label="00", style=discord.ButtonStyle.success, row=3)
         btn_00.callback = self.make_callback("00")
         self.add_item(btn_00)
         
-        confirm_btn = Button(label="✅ Place Bet", style=discord.ButtonStyle.success, row=4)
+        # Row 5: Confirm and Cancel
+        confirm_btn = Button(label="✅ Confirm & Place Bet", style=discord.ButtonStyle.success, row=4)
         confirm_btn.callback = self.confirm_bet
         self.add_item(confirm_btn)
         
@@ -1101,21 +1128,37 @@ class MultiNumberButtonView(View):
             if number in self.selected_numbers:
                 self.selected_numbers.remove(number)
             else:
-                self.selected_numbers.append(number)
+                if len(self.selected_numbers) < self.required_count:
+                    self.selected_numbers.append(number)
+                else:
+                    await interaction.response.send_message(
+                        f"❌ You can only select {self.required_count} numbers!",
+                        ephemeral=True
+                    )
+                    return
             
-            selected = ', '.join(self.selected_numbers) if self.selected_numbers else "None"
-            need = max(0, self.required_count - len(self.selected_numbers))
+            # Update display
+            if self.selected_numbers:
+                selected_display = ', '.join(self.selected_numbers)
+                need = self.required_count - len(self.selected_numbers)
+                if need == 0:
+                    content = f"**✅ Selected:** {selected_display}\n**Press Confirm to place bet!**"
+                else:
+                    content = f"**Selected:** {selected_display}\n**Need {need} more**"
+            else:
+                content = f"**Select {self.required_count} numbers**"
             
-            await interaction.response.edit_message(
-                content=f"**Selected:** {selected}\n**Need:** {need} more number{'s' if need != 1 else ''}",
-                view=self
-            )
+            await interaction.response.edit_message(content=content, view=self)
         return callback
     
     async def confirm_bet(self, interaction: discord.Interaction):
         if len(self.selected_numbers) != self.required_count:
-            await interaction.response.send_message(f"❌ Select exactly {self.required_count} numbers!", ephemeral=True)
+            await interaction.response.send_message(
+                f"❌ You must select exactly {self.required_count} numbers!",
+                ephemeral=True
+            )
             return
+        
         modal = BetAmountModal(self.parent_view, self.bet_type, self.selected_numbers)
         await interaction.response.send_modal(modal)
     
@@ -1134,7 +1177,7 @@ class RouletteView(View):
         await interaction.response.defer()
         data, account = get_account(interaction.user.id)
 
-        # Store bet info for later use
+        # Store bet info
         self.current_bet_amount = bet_amount
         self.current_bet_type = bet_type
         self.current_bet_choice = bet_choice
@@ -1150,15 +1193,13 @@ class RouletteView(View):
             save_economy(data)
 
         # ============ ANIMATION ============
-        # Send initial message
         anim_msg = await interaction.followup.send("🎡 **Spinning the wheel...**")
         
-        # Animate the ball spinning around the wheel
-        for i in range(12):  # 12 animation frames
-            ball_pos = i * 5  # Move ball position
+        # Animate the ball
+        for i in range(12):
+            ball_pos = i * 3
             spinner = create_spinner_animation(ball_pos)
             
-            # Different messages for each phase
             if i < 4:
                 status = "**🏀 Ball is spinning...**"
             elif i < 8:
@@ -1176,23 +1217,18 @@ class RouletteView(View):
         result = random.choice(numbers)
         color = check_color(result)
         
-        # Calculate win/loss using stored bet info
+        # Calculate win/loss
         win = False
         payout = 0
-        outcome_text = "No bet placed."
         
         if self.current_bet_type and self.current_bet_amount:
             bet_type = self.current_bet_type
             bet_choice = self.current_bet_choice
             bet_amount = self.current_bet_amount
             
-            # Debug print to verify bet info
-            print(f"Bet Type: {bet_type}, Choice: {bet_choice}, Amount: {bet_amount}")
-            
             if bet_type in ["single", "split", "street", "corner", "six_line"]:
-                if str(result) in bet_choice:
+                if str(result) in bet_choice:  # bet_choice is a list of strings
                     win = True
-                    print(f"WIN! Result {result} in {bet_choice}")
                 multiplier = BET_TYPES[bet_type]
             elif bet_type == "red_black" and bet_choice.lower() == color:
                 win = True
@@ -1214,9 +1250,9 @@ class RouletteView(View):
                 multiplier = 2
             elif bet_type == "column" and result not in ["0", "00"]:
                 columns = {
-                    "1st": {1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34},
-                    "2nd": {2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35},
-                    "3rd": {3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36}
+                    "1st": {1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34},  # ✅ FIXED
+                    "2nd": {2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35},  # ✅ FIXED
+                    "3rd": {3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36}   # ✅ FIXED
                 }
                 if int(result) in columns[bet_choice]:
                     win = True
@@ -1235,6 +1271,7 @@ class RouletteView(View):
                 color_theme = discord.Color.red()
                 save_economy(data)
         else:
+            outcome_text = "ℹ️ No bet placed"
             color_theme = discord.Color.blue()
 
         # Update inactivity counter
@@ -1250,12 +1287,13 @@ class RouletteView(View):
             description=f"```\n{table}\n```"
         )
         
-        # Bet info - using stored values
+        # Bet info
         bet_info = f"**{self.current_bet_amount} PNG**" if self.current_bet_amount else "None"
         bet_type_display = self.current_bet_type.replace("_", " ").title() if self.current_bet_type else "-"
+        
         if self.current_bet_choice:
             if isinstance(self.current_bet_choice, list):
-                bet_choice_display = f" ({', '.join(self.current_bet_choice[:3])})"
+                bet_choice_display = f" ({', '.join(self.current_bet_choice)})"
             else:
                 bet_choice_display = f" ({self.current_bet_choice})"
         else:
@@ -1270,7 +1308,7 @@ class RouletteView(View):
         
         embed.set_footer(text="Click buttons to bet again • Stay or Leave to continue")
         
-        # Reset current bet for next round
+        # Reset bet for next round
         self.current_bet_amount = None
         self.current_bet_type = None
         self.current_bet_choice = None
