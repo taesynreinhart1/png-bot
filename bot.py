@@ -289,18 +289,18 @@ async def on_ready():
 # ================= BLACKJACK =================
 BLACKJACK_MIN_BET = 10
 BLACKJACK_MAX_BET = 1000
-BLACKJACK_PAYOUT = 2  # 2x for normal win
-BLACKJACK_BLACKJACK_PAYOUT = 3  # 3x for blackjack
 
 # Card values
 CARD_VALUES = {
-    '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, '10': 10,
-    'J': 10, 'Q': 10, 'K': 10, 'A': 11
+    '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9, 
+    '10': 10, 'J': 10, 'Q': 10, 'K': 10, 'A': 11
 }
 
-# Card suits with emojis
+# Card suits
 SUITS = ['♠️', '♥️', '♦️', '♣️']
-SUIT_COLORS = {'♠️': '⚫', '♥️': '🔴', '♦️': '🔴', '♣️': '⚫'}
+
+# Store active games
+ACTIVE_BLACKJACK_GAMES = {}
 
 class BlackjackGame:
     def __init__(self, player_id, bet_amount):
@@ -326,19 +326,27 @@ class BlackjackGame:
                 deck.append(f"{card}{suit}")
         return deck
     
+    def get_card_value(self, card):
+        """Extract card value correctly (handles 10 properly)"""
+        if card.startswith('10'):
+            return '10'
+        else:
+            return card[0]  # First character: 'J', 'Q', 'K', 'A', '2'-'9'
+    
     def calculate_score(self, hand):
-        """Calculate hand score, handling Aces properly"""
+        """Calculate hand score with proper Ace handling"""
         score = 0
         aces = 0
         
         for card in hand:
-            card_value = card[:-1]
-            if card_value == 'A':
+            value = self.get_card_value(card)
+            if value == 'A':
                 aces += 1
                 score += 11
             else:
-                score += CARD_VALUES[card_value]
+                score += CARD_VALUES[value]
         
+        # Adjust aces from 11 to 1 if needed
         while score > 21 and aces > 0:
             score -= 10
             aces -= 1
@@ -351,30 +359,15 @@ class BlackjackGame:
         hand.append(card)
         return card
     
-    def format_hand(self, hand, hide_first=False):
-        """Format hand for display with emojis"""
-        if hide_first and len(hand) > 0:
-            hidden_hand = ["??"] + hand[1:]
-            return " ".join(hidden_hand)
-        else:
-            return " ".join(hand)
-    
-    def get_hand_value_with_emoji(self, score):
-        """Get hand value with appropriate emoji"""
-        if score > 21:
-            return f"💥 **{score}** (BUST!)"
-        elif score == 21:
-            return f"🎯 **{score}**"
-        else:
-            return f"**{score}**"
-    
     def start_game(self):
         """Start a new blackjack game"""
+        # Deal initial cards
         self.deal_card(self.player_hand)
         self.deal_card(self.dealer_hand)
         self.deal_card(self.player_hand)
         self.deal_card(self.dealer_hand)
         
+        # Calculate scores
         self.player_score = self.calculate_score(self.player_hand)
         self.dealer_score = self.calculate_score([self.dealer_hand[0]])
         
@@ -405,8 +398,10 @@ class BlackjackGame:
         if self.game_over:
             return
         
+        # Reveal dealer's full hand
         self.dealer_score = self.calculate_score(self.dealer_hand)
         
+        # Dealer draws to 17 or higher
         while self.dealer_score < 17:
             self.deal_card(self.dealer_hand)
             self.dealer_score = self.calculate_score(self.dealer_hand)
@@ -426,25 +421,42 @@ class BlackjackGame:
         elif self.dealer_score < self.player_score:
             self.result = "win"
             if self.blackjack:
-                self.payout = int(self.bet_amount * 2.5)  # Blackjack pays 3:2
+                self.payout = int(self.bet_amount * 2.5)
             else:
                 self.payout = self.bet_amount * 2
         else:
             self.result = "push"
             self.payout = self.bet_amount
     
-    def create_embed(self, interaction, account, game_started=False):
+    def format_hand(self, hand, hide_first=False):
+        """Format hand for display"""
+        if hide_first and len(hand) > 0:
+            return "?? " + " ".join(hand[1:])
+        return " ".join(hand)
+    
+    def get_score_display(self, score, is_bust=False):
+        """Get score with emoji"""
+        if is_bust or score > 21:
+            return f"💥 **{score}**"
+        elif score == 21:
+            return f"🎯 **{score}**"
+        return f"**{score}**"
+    
+    def create_embed(self, interaction, account):
         """Create the game embed"""
-        
         if self.game_over:
-            title = "🎰 **BLACKJACK - GAME OVER** 🎰"
-            color = discord.Color.gold() if self.payout > self.bet_amount else discord.Color.red()
-        elif game_started:
+            if self.payout > self.bet_amount:
+                title = "🎰 **BLACKJACK - YOU WIN!** 🎰"
+                color = discord.Color.gold()
+            elif self.payout == self.bet_amount:
+                title = "🎰 **BLACKJACK - PUSH** 🎰"
+                color = discord.Color.blue()
+            else:
+                title = "🎰 **BLACKJACK - YOU LOST** 🎰"
+                color = discord.Color.red()
+        else:
             title = "🎰 **BLACKJACK - IN PROGRESS** 🎰"
             color = discord.Color.green()
-        else:
-            title = "🎰 **BLACKJACK - NEW GAME** 🎰"
-            color = discord.Color.blue()
         
         embed = discord.Embed(title=title, color=color)
         
@@ -454,85 +466,53 @@ class BlackjackGame:
         embed.add_field(name="💎 Balance", value=f"{account['balance']} PNG", inline=True)
         
         # Player hand
-        if self.player_hand:
-            player_hand_display = self.format_hand(self.player_hand)
-            player_score_display = self.get_hand_value_with_emoji(self.player_score)
-            
-            # Add blackjack indicator
-            if self.blackjack and not self.game_over:
-                hand_title = f"🃏 **YOUR HAND** {player_score_display} 🎉 **BLACKJACK!**"
-            else:
-                hand_title = f"🃏 **YOUR HAND** {player_score_display}"
-            
-            embed.add_field(
-                name=hand_title,
-                value=f"```\n{player_hand_display}\n```",
-                inline=False
-            )
+        player_display = self.format_hand(self.player_hand)
+        player_score_text = self.get_score_display(self.player_score, self.player_score > 21)
+        if self.blackjack and not self.game_over:
+            hand_title = f"🃏 **YOUR HAND** {player_score_text} 🎉 **BLACKJACK!**"
+        else:
+            hand_title = f"🃏 **YOUR HAND** {player_score_text}"
+        embed.add_field(name=hand_title, value=f"```\n{player_display}\n```", inline=False)
         
         # Dealer hand
-        if self.dealer_hand:
-            hide = not self.game_over
-            dealer_hand_display = self.format_hand(self.dealer_hand, hide_first=hide)
-            
-            if hide:
-                visible_score = self.calculate_score([self.dealer_hand[0]])
-                dealer_score_display = f"**{visible_score}** + ?"
-            else:
-                dealer_score_display = self.get_hand_value_with_emoji(self.dealer_score)
-            
-            embed.add_field(
-                name=f"🤵 **DEALER** {dealer_score_display}",
-                value=f"```\n{dealer_hand_display}\n```",
-                inline=False
-            )
+        hide = not self.game_over
+        dealer_display = self.format_hand(self.dealer_hand, hide_first=hide)
+        if hide:
+            visible_score = self.calculate_score([self.dealer_hand[0]])
+            dealer_score_text = f"**{visible_score}** + ?"
+        else:
+            dealer_score_text = self.get_score_display(self.dealer_score, self.dealer_score > 21)
+        embed.add_field(name=f"🤵 **DEALER** {dealer_score_text}", value=f"```\n{dealer_display}\n```", inline=False)
         
         # Result if game over
         if self.game_over:
             if self.result == "bust":
-                result_text = f"💥 **BUST!** You lost {self.bet_amount} PNG"
+                result_text = f"💥 **BUST!** Lost {self.bet_amount} PNG"
             elif self.result == "dealer_bust":
-                if self.blackjack:
-                    profit = self.payout - self.bet_amount
-                    result_text = f"🎉 **BLACKJACK!** Dealer bust! +{profit} PNG!"
-                else:
-                    result_text = f"🎉 **DEALER BUST!** You won {self.bet_amount} PNG!"
+                profit = self.payout - self.bet_amount
+                result_text = f"🎉 **DEALER BUST!** +{profit} PNG!"
             elif self.result == "win":
-                if self.blackjack:
-                    profit = self.payout - self.bet_amount
-                    result_text = f"🎉 **BLACKJACK!** +{profit} PNG!"
-                else:
-                    result_text = f"🎉 **YOU WIN!** +{self.bet_amount} PNG!"
+                profit = self.payout - self.bet_amount
+                result_text = f"🎉 **YOU WIN!** +{profit} PNG!"
             elif self.result == "loss":
                 result_text = f"💀 **DEALER WINS!** Lost {self.bet_amount} PNG"
             elif self.result == "push":
                 result_text = f"🤝 **PUSH!** Bet returned: {self.bet_amount} PNG"
-            
             embed.add_field(name="📊 **RESULT**", value=result_text, inline=False)
         
-        # Instructions
-        if not self.game_over and game_started and not self.blackjack:
-            embed.set_footer(text="🎯 Hit • 🛑 Stand • 🏃 Forfeit")
-        elif not self.game_over and not game_started:
-            embed.set_footer(text="💰 Click PLACE BET to start!")
-        
         return embed
-
-# Store active blackjack games
-ACTIVE_BLACKJACK_GAMES = {}
 
 class BlackjackBetModal(Modal, title="💰 Place Your Blackjack Bet"):
     def __init__(self):
         super().__init__()
         self.bet = TextInput(
             label="Bet Amount (PNG)",
-            placeholder=f"Min: {BLACKJACK_MIN_BET}, Max: {BLACKJACK_MAX_BET}",
+            placeholder=f"Min: {BLACKJACK_MIN_BET} • Max: {BLACKJACK_MAX_BET}",
             required=True
         )
         self.add_item(self.bet)
     
     async def on_submit(self, interaction: discord.Interaction):
-        # DEFER FIRST to prevent "interaction failed"
         await interaction.response.defer()
         
         try:
@@ -557,18 +537,18 @@ class BlackjackBetModal(Modal, title="💰 Place Your Blackjack Bet"):
             account["balance"] -= bet_amount
             save_economy(data)
             
-            # Create new game
+            # Create and start game
             game = BlackjackGame(interaction.user.id, bet_amount)
             game.start_game()
             
             # Store game
             ACTIVE_BLACKJACK_GAMES[str(interaction.user.id)] = game
             
-            # Create and send embed
-            embed = game.create_embed(interaction, account, game_started=True)
+            # Create embed and view
+            embed = game.create_embed(interaction, account)
             view = BlackjackView(game)
             
-            # Send the game message
+            # Send message
             await interaction.followup.send(embed=embed, view=view)
             game.message = await interaction.original_response()
             
@@ -577,32 +557,27 @@ class BlackjackBetModal(Modal, title="💰 Place Your Blackjack Bet"):
 
 class BlackjackView(View):
     def __init__(self, game):
-        super().__init__(timeout=120)  # Longer timeout
+        super().__init__(timeout=120)
         self.game = game
     
-    async def update_game_message(self, interaction, account):
-        """Update the game message with current state"""
-        embed = self.game.create_embed(interaction, account, game_started=True)
+    async def update_game(self, interaction, account):
+        """Update the game message"""
+        embed = self.game.create_embed(interaction, account)
         
         if self.game.game_over:
-            # Game over - remove buttons but keep message
             await interaction.response.edit_message(embed=embed, view=None)
-            
-            # Remove from active games
             ACTIVE_BLACKJACK_GAMES.pop(self.game.player_id, None)
             
-            # Add winnings to balance
+            # Add winnings
             if self.game.payout > 0:
                 data, account = get_account(int(self.game.player_id))
                 account["balance"] += self.game.payout
                 save_economy(data)
         else:
-            # Game ongoing - update with same view
             await interaction.response.edit_message(embed=embed, view=self)
     
     @discord.ui.button(label="🎯 HIT", style=discord.ButtonStyle.primary, emoji="🃏", row=0)
-    async def hit(self, interaction: discord.Interaction, button: Button):
-        # Verify this is the right player
+    async def hit_button(self, interaction: discord.Interaction, button: Button):
         if str(interaction.user.id) != self.game.player_id:
             await interaction.response.send_message("❌ This isn't your game!", ephemeral=True)
             return
@@ -613,18 +588,12 @@ class BlackjackView(View):
             await interaction.followup.send("❌ Game is already over!", ephemeral=True)
             return
         
-        # Hit
         self.game.hit()
-        
-        # Get updated account
         data, account = get_account(interaction.user.id)
-        
-        # Update message
-        await self.update_game_message(interaction, account)
+        await self.update_game(interaction, account)
     
     @discord.ui.button(label="🛑 STAND", style=discord.ButtonStyle.secondary, emoji="✋", row=0)
-    async def stand(self, interaction: discord.Interaction, button: Button):
-        # Verify this is the right player
+    async def stand_button(self, interaction: discord.Interaction, button: Button):
         if str(interaction.user.id) != self.game.player_id:
             await interaction.response.send_message("❌ This isn't your game!", ephemeral=True)
             return
@@ -635,39 +604,27 @@ class BlackjackView(View):
             await interaction.followup.send("❌ Game is already over!", ephemeral=True)
             return
         
-        # Stand
         self.game.stand()
-        
-        # Get updated account
         data, account = get_account(interaction.user.id)
-        
-        # Update message
-        await self.update_game_message(interaction, account)
+        await self.update_game(interaction, account)
     
     @discord.ui.button(label="🏃 FORFEIT", style=discord.ButtonStyle.danger, emoji="❌", row=0)
-    async def forfeit(self, interaction: discord.Interaction, button: Button):
-        # Verify this is the right player
+    async def forfeit_button(self, interaction: discord.Interaction, button: Button):
         if str(interaction.user.id) != self.game.player_id:
             await interaction.response.send_message("❌ This isn't your game!", ephemeral=True)
             return
         
         await interaction.response.defer()
         
-        # End game as loss
         self.game.game_over = True
         self.game.result = "forfeit"
         self.game.payout = 0
         
-        # Get updated account
         data, account = get_account(interaction.user.id)
-        
-        # Update message with forfeit result
-        embed = self.game.create_embed(interaction, account, game_started=True)
+        embed = self.game.create_embed(interaction, account)
         await interaction.followup.edit_message(embed=embed, view=None)
         
-        # Remove from active games
         ACTIVE_BLACKJACK_GAMES.pop(self.game.player_id, None)
-        
         await interaction.followup.send("🏃 You forfeited the game.", ephemeral=True)
 
 class BlackjackStartView(View):
@@ -685,12 +642,10 @@ class BlackjackStartView(View):
 
 @bot.tree.command(name="blackjack", description="🎰 Play blackjack against the dealer!", guild=guild)
 async def blackjack(interaction: discord.Interaction):
-    """Start a blackjack game"""
     await interaction.response.defer()
     
     user_id = str(interaction.user.id)
     
-    # Check if user already has an active game
     if user_id in ACTIVE_BLACKJACK_GAMES:
         await interaction.followup.send(
             "❌ You already have an active blackjack game! Finish that one first.",
@@ -698,21 +653,25 @@ async def blackjack(interaction: discord.Interaction):
         )
         return
     
-    # Get account for balance display
     data, account = get_account(interaction.user.id)
     
-    # Create initial embed
-    game = BlackjackGame(interaction.user.id, 0)
-    embed = game.create_embed(interaction, account, game_started=False)
+    # Create a temporary game just for the embed
+    temp_game = BlackjackGame(interaction.user.id, 0)
+    embed = discord.Embed(
+        title="🎰 **BLACKJACK** 🎰",
+        color=discord.Color.blue(),
+        description="Welcome to Blackjack! Click PLACE BET to start."
+    )
+    embed.add_field(name="👤 Player", value=interaction.user.mention, inline=True)
+    embed.add_field(name="💰 Balance", value=f"{account['balance']} PNG", inline=True)
+    embed.add_field(name="📋 Rules", value="• Get as close to 21 as possible\n• Dealer stands on 17\n• Blackjack pays 3:2", inline=False)
     
-    # Create view with bet button
     view = BlackjackStartView()
-    
     await interaction.followup.send(embed=embed, view=view)
 
 @tasks.loop(minutes=5)
 async def cleanup_blackjack_games():
-    """Remove inactive blackjack games"""
+    """Clean up finished games"""
     to_remove = []
     for user_id, game in ACTIVE_BLACKJACK_GAMES.items():
         if game.game_over:
@@ -721,6 +680,7 @@ async def cleanup_blackjack_games():
     for user_id in to_remove:
         ACTIVE_BLACKJACK_GAMES.pop(user_id, None)
         print(f"🧹 Cleaned up blackjack game for {user_id}")
+        
 # ================= BALANCE =================
 @bot.tree.command(name="balance", description="Check your PNG balance", guild=guild)
 async def balance(interaction: discord.Interaction):
