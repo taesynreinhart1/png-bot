@@ -15,6 +15,7 @@ from discord.ext import tasks
 import base64
 import requests
 import traceback
+import asyncio
 
 # ================= GITHUB STORAGE =================
 class GitHubStorage:
@@ -473,8 +474,6 @@ async def slots(interaction: discord.Interaction, bet: int):
     await interaction.followup.send(embed=embed)
 
 # ================= ROULETTE =================
-import asyncio  # Make sure this is at the top with other imports
-
 MIN_BET_ROULETTE = 10
 MAX_BET_ROULETTE = 10000
 RED_NUMBERS = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
