@@ -559,7 +559,17 @@ async def check_inactive_sessions():
         except:
             pass
 
-check_inactive_sessions.start()
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    try:
+        synced = await bot.tree.sync(guild=guild)
+        print(f"Synced {len(synced)} commands.")
+    except Exception as e:
+        print(f"Failed to sync commands: {e}")
+    
+    # Start the task loop after the event loop exists
+    check_inactive_sessions.start()
 
 # ================= LEADERBOARD =================
 
