@@ -8,75 +8,217 @@ import math
 from datetime import datetime
 from flask import Flask
 import threading
-import os
 import time
 import random
 from discord.ui import View, Button, Modal, TextInput
 from discord.ext import tasks
+import base64
+import requests
+import traceback
 
+# ================= GITHUB STORAGE =================
+class GitHubStorage:
+    def __init__(self):
+        self.token = os.getenv("GITHUBTOKEN")
+        self.repo = "taesynreinhart1/png-bot"  # CHANGE THIS to your actual repo name
+        self.branch = "main"
+        
+        # Detect if we're in production (Render/Railway/Heroku)
+        self.is_production = bool(os.environ.get('RENDER') or os.environ.get('RAILWAY') or os.environ.get('DYNO'))
+        
+        # Cache for data
+        self.economy_cache = {"users": {}}
+        self.leaderboard_cache = {}
+        self.economy_sha = None
+        self.leaderboard_sha = None
+        self.pending_saves = False
+        
+        print(f"🔧 Storage Mode: {'GitHub (Production)' if self.is_production and self.token else 'Local (Development)'}")
+        
+        if self.is_production and self.token:
+            self.load_all()
+    
+    def load_from_github(self, path):
+        """Load JSON directly from GitHub repo"""
+        url = f"https://api.github.com/repos/{self.repo}/contents/{path}?ref={self.branch}"
+        headers = {
+            "Authorization": f"token {self.token}",
+            "Accept": "application/vnd.github.v3+json"
+        }
+        
+        try:
+            response = requests.get(url, headers=headers)
+            if response.status_code == 200:
+                content = response.json()
+                decoded = base64.b64decode(content['content']).decode('utf-8')
+                return json.loads(decoded), content['sha']
+            else:
+                print(f"⚠️ GitHub file not found: {path}, will create on first save")
+                return None, None
+        except Exception as e:
+            print(f"❌ Error loading from GitHub: {e}")
+            return None, None
+    
+    def save_to_github(self, path, data, sha=None):
+        """Save JSON directly to GitHub repo"""
+        url = f"https://api.github.com/repos/{self.repo}/contents/{path}"
+        headers = {
+            "Authorization": f"token {self.token}",
+            "Accept": "application/vnd.github.v3+json"
+        }
+        
+        content = json.dumps(data, indent=4)
+        encoded = base64.b64encode(content.encode('utf-8')).decode('utf-8')
+        
+        payload = {
+            "message": f"Update {path} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "content": encoded,
+            "branch": self.branch
+        }
+        
+        if sha:
+            payload["sha"] = sha
+        
+        try:
+            response = requests.put(url, headers=headers, json=payload)
+            if response.status_code in [200, 201]:
+                print(f"✅ Saved to GitHub: {path}")
+                return True
+            else:
+                print(f"❌ GitHub save failed: {response.status_code}")
+                return False
+        except Exception as e:
+            print(f"❌ Error saving to GitHub: {e}")
+            return False
+    
+    def load_all(self):
+        """Load both economy and leaderboard data from GitHub"""
+        if not self.is_production or not self.token:
+            return
+        
+        # Load economy
+        econ_data, self.economy_sha = self.load_from_github("economy.json")
+        if econ_data:
+            self.economy_cache = econ_data
+            print(f"💰 Loaded economy data from GitHub: {len(econ_data.get('users', {}))} accounts")
+        else:
+            self.economy_cache = {"users": {}}
+        
+        # Load leaderboard
+        lb_data, self.leaderboard_sha = self.load_from_github("leaderboard.json")
+        if lb_data:
+            self.leaderboard_cache = lb_data
+            print(f"📊 Loaded leaderboard data from GitHub: {len(lb_data)} months")
+        else:
+            self.leaderboard_cache = {}
+    
+    def get_economy(self):
+        """Get economy data"""
+        if self.is_production and self.token:
+            return self.economy_cache
+        else:
+            # Local file mode
+            try:
+                with open(ECON_FILE, "r") as f:
+                    return json.load(f)
+            except FileNotFoundError:
+                return {"users": {}}
+    
+    def save_economy(self, data):
+        """Save economy data"""
+        if self.is_production and self.token:
+            self.economy_cache = data
+            self.pending_saves = True
+        else:
+            # Local file mode
+            os.makedirs(os.path.dirname(ECON_FILE), exist_ok=True)
+            with open(ECON_FILE, "w") as f:
+                json.dump(data, f, indent=4)
+    
+    def get_leaderboard(self):
+        """Get leaderboard data"""
+        if self.is_production and self.token:
+            return self.leaderboard_cache
+        else:
+            try:
+                with open(DATA_FILE, "r") as f:
+                    return json.load(f)
+            except FileNotFoundError:
+                return {}
+    
+    def save_leaderboard(self, data):
+        """Save leaderboard data"""
+        if self.is_production and self.token:
+            self.leaderboard_cache = data
+            self.pending_saves = True
+        else:
+            # Local file mode
+            os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
+            with open(DATA_FILE, "w") as f:
+                json.dump(data, f, indent=4)
+    
+    @tasks.loop(seconds=30)
+    async def auto_save(self):
+        """Auto-save pending changes to GitHub"""
+        if not self.is_production or not self.token:
+            return
+        
+        if self.pending_saves:
+            print("💾 Auto-saving to GitHub...")
+            
+            if self.economy_cache:
+                success = self.save_to_github("economy.json", self.economy_cache, self.economy_sha)
+                if success:
+                    _, self.economy_sha = self.load_from_github("economy.json")
+            
+            if self.leaderboard_cache:
+                success = self.save_to_github("leaderboard.json", self.leaderboard_cache, self.leaderboard_sha)
+                if success:
+                    _, self.leaderboard_sha = self.load_from_github("leaderboard.json")
+            
+            self.pending_saves = False
+            print("✅ Auto-save complete")
 
+# ================= CONFIG =================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ECON_FILE = os.path.join(BASE_DIR, "economy.json")
+DATA_FILE = os.path.join(BASE_DIR, "leaderboard.json")
+
 START_BALANCE = 500
 MIN_BET = 10
 MAX_BET = 1000
 DAILY_REWARD = 200
 DAILY_COOLDOWN = 86400  # 24 hours
 
-
-# ---------------- CONFIG ----------------
+# Discord config
 PYTHON_VERSION = "3.11"
-GUILD_ID = 1361851093004320908  # replace with your server ID
-DATA_FILE = os.path.join(BASE_DIR, "leaderboard.json")  # FIXED: Use absolute path
+GUILD_ID = 1361851093004320908
 TOKEN = os.getenv("BOTTOKEN")
+AUTHORIZED_USERS = [1035911200237699072, 1252375690242818121]
 
-# Add your authorized Discord IDs here (for backend commands)
-AUTHORIZED_USERS = [1035911200237699072, 1252375690242818121]  # replace with actual IDs
+# Initialize GitHub storage
+storage = GitHubStorage()
 
-# ---------------- HELPER FUNCTIONS ----------------
+# ================= HELPER FUNCTIONS =================
 def load_data():
-    try:
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        # Create the file with empty structure if it doesn't exist
-        empty_data = {}
-        save_data(empty_data)
-        return empty_data
+    return storage.get_leaderboard()
 
 def save_data(data):
-    # FIXED: Ensure directory exists and write with proper formatting
-    os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4)
-    print(f"✅ Saved leaderboard data to {DATA_FILE}")  # Debug print
+    storage.save_leaderboard(data)
 
 def get_month_key(month: str = None):
     if month:
         return month
-    return datetime.now().strftime("%Y-%m")  # current month e.g., "2026-02"
+    return datetime.now().strftime("%Y-%m")
 
 def is_authorized(user_id):
     return user_id in AUTHORIZED_USERS
 
-# ================= PNG CASINO SYSTEM =================
-
 def load_economy():
-    try:
-        with open(ECON_FILE, "r") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        # Create the file with proper structure if it doesn't exist
-        empty_data = {"users": {}}
-        save_economy(empty_data)
-        return empty_data
+    return storage.get_economy()
 
 def save_economy(data):
-    # FIXED: Ensure directory exists and write with proper formatting
-    os.makedirs(os.path.dirname(ECON_FILE), exist_ok=True)
-    with open(ECON_FILE, "w") as f:
-        json.dump(data, f, indent=4)
-    print(f"💰 Saved economy data to {ECON_FILE}")  # Debug print
+    storage.save_economy(data)
 
 def get_account(user_id):
     data = load_economy()
@@ -90,17 +232,32 @@ def get_account(user_id):
             "last_daily": 0
         }
         save_economy(data)
-        print(f"🆕 Created new account for user {user_id}")  # Debug print
+        print(f"🆕 Created new account for user {user_id}")
 
     return data, data["users"][user_id]
 
-# ---------------- BOT SETUP ----------------
+# ================= BOT SETUP =================
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 guild = discord.Object(id=GUILD_ID)
 
-# ================= BALANCE =================
+# ================= EVENTS =================
+@bot.event
+async def on_ready():
+    print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
+    
+    # Start auto-save loop in production
+    if storage.is_production and storage.token:
+        storage.auto_save.start()
+        print("🔄 GitHub auto-save loop started (every 30 seconds)")
+    
+    try:
+        synced = await bot.tree.sync(guild=guild)
+        print(f"🔄 Synced {len(synced)} commands.")
+    except Exception as e:
+        print(f"❌ Failed to sync commands: {e}")
 
+# ================= BALANCE =================
 @bot.tree.command(name="balance", description="Check your PNG balance", guild=guild)
 async def balance(interaction: discord.Interaction):
     data, account = get_account(interaction.user.id)
@@ -110,10 +267,9 @@ async def balance(interaction: discord.Interaction):
     embed.add_field(name="Balance", value=f"{account['balance']} PNG")
 
     await interaction.response.send_message(embed=embed)
-    print(f"💳 {interaction.user.name} checked balance: {account['balance']} PNG")  # Debug print
+    print(f"💳 {interaction.user.name} checked balance: {account['balance']} PNG")
 
 # ================= DAILY =================
-
 @bot.tree.command(name="daily", description="Claim daily PNG coins", guild=guild)
 async def daily(interaction: discord.Interaction):
     data, account = get_account(interaction.user.id)
@@ -132,17 +288,13 @@ async def daily(interaction: discord.Interaction):
     account["last_daily"] = now
     save_economy(data)
 
-    await interaction.response.send_message(
-        f"🎁 You received {DAILY_REWARD} PNG!"
-    )
-    print(f"🎁 {interaction.user.name} claimed daily reward. New balance: {account['balance']} PNG")  # Debug print
+    await interaction.response.send_message(f"🎁 You received {DAILY_REWARD} PNG!")
+    print(f"🎁 {interaction.user.name} claimed daily. New balance: {account['balance']} PNG")
 
 # ================= COINFLIP =================
-
 @bot.tree.command(name="coinflip", description="Bet on heads or tails", guild=guild)
 @app_commands.describe(bet="Amount to bet", choice="heads or tails")
 async def coinflip(interaction: discord.Interaction, bet: int, choice: str):
-
     choice = choice.lower()
 
     if choice not in ["heads", "tails"]:
@@ -159,7 +311,6 @@ async def coinflip(interaction: discord.Interaction, bet: int, choice: str):
         await interaction.response.send_message("Not enough balance.", ephemeral=True)
         return
 
-    # House edge: 52% chance for house result
     result = "heads" if random.random() < 0.48 else "tails"
 
     embed = discord.Embed(title="🪙 Coinflip", color=discord.Color.blue())
@@ -177,14 +328,11 @@ async def coinflip(interaction: discord.Interaction, bet: int, choice: str):
 
     save_economy(data)
     await interaction.response.send_message(embed=embed)
-    print(f"🪙 {interaction.user.name} played coinflip. New balance: {account['balance']} PNG")  # Debug print
 
 # ================= DICE (VS BOT) =================
-
 @bot.tree.command(name="dice", description="Roll against the bot", guild=guild)
 @app_commands.describe(bet="Amount to bet")
 async def dice(interaction: discord.Interaction, bet: int):
-
     if bet < MIN_BET or bet > MAX_BET:
         await interaction.response.send_message("Invalid bet.", ephemeral=True)
         return
@@ -198,7 +346,6 @@ async def dice(interaction: discord.Interaction, bet: int):
     user_roll = random.randint(1, 6)
     bot_roll = random.randint(1, 6)
 
-    # House advantage: bot wins ties
     if user_roll == bot_roll:
         bot_roll = random.randint(1, 6)
 
@@ -217,17 +364,11 @@ async def dice(interaction: discord.Interaction, bet: int):
 
     save_economy(data)
     await interaction.response.send_message(embed=embed)
-    print(f"🎲 {interaction.user.name} played dice. New balance: {account['balance']} PNG")  # Debug print
 
 # ================= DICE VS PLAYER =================
-
 @bot.tree.command(name="dicevs", description="Challenge another user to a dice duel", guild=guild)
-@app_commands.describe(
-    opponent="User to challenge",
-    bet="Amount each player bets"
-)
+@app_commands.describe(opponent="User to challenge", bet="Amount each player bets")
 async def dicevs(interaction: discord.Interaction, opponent: discord.Member, bet: int):
-
     if opponent.bot:
         await interaction.response.send_message("You cannot challenge a bot.", ephemeral=True)
         return
@@ -252,7 +393,6 @@ async def dicevs(interaction: discord.Interaction, opponent: discord.Member, bet
         await interaction.response.send_message("Opponent doesn't have enough balance.", ephemeral=True)
         return
 
-    # Roll dice
     challenger_roll = random.randint(1, 6)
     opponent_roll = random.randint(1, 6)
 
@@ -275,17 +415,14 @@ async def dicevs(interaction: discord.Interaction, opponent: discord.Member, bet
     else:
         embed.add_field(name="Result", value="Tie! No coins exchanged.")
 
-    # SAVE BOTH ACCOUNTS PROPERLY
     data = load_economy()
     data["users"][str(interaction.user.id)] = challenger_account
     data["users"][str(opponent.id)] = opponent_account
     save_economy(data)
 
     await interaction.response.send_message(embed=embed)
-    print(f"🎲 {interaction.user.name} vs {opponent.name} dice duel. Bet: {bet} PNG")  # Debug print
 
 # ================= SLOTS =================
-
 @bot.tree.command(name="slots", description="Play PNG slots", guild=guild)
 @app_commands.describe(bet="Amount to bet")
 async def slots(interaction: discord.Interaction, bet: int):
@@ -322,31 +459,18 @@ async def slots(interaction: discord.Interaction, bet: int):
 
     save_economy(data)
     await interaction.response.send_message(embed=embed)
-    print(f"🎰 {interaction.user.name} played slots. New balance: {account['balance']} PNG")  # Debug print
 
 # ================= ROULETTE =================
-
-# --- Configuration ---
-MIN_BET_ROULETTE = 10  # Changed from 0 to 10 to be consistent with other games
+MIN_BET_ROULETTE = 10
 MAX_BET_ROULETTE = 10000
-
 RED_NUMBERS = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36}
-ACTIVE_SESSIONS = {}  # {user_id: {"inactive_rounds": int, "last_bet": dict}}
+ACTIVE_SESSIONS = {}
 
 BET_TYPES = {
-    "single": 35,
-    "split": 17,
-    "street": 11,
-    "corner": 8,
-    "six_line": 5,
-    "column": 2,
-    "dozen": 2,
-    "red_black": 1,
-    "even_odd": 1,
-    "low_high": 1
+    "single": 35, "split": 17, "street": 11, "corner": 8, "six_line": 5,
+    "column": 2, "dozen": 2, "red_black": 1, "even_odd": 1, "low_high": 1
 }
 
-# --- Helpers ---
 def check_color(number):
     if number in RED_NUMBERS:
         return "red"
@@ -355,7 +479,6 @@ def check_color(number):
     else:
         return "black"
 
-# --- Bet Amount Modal ---
 class BetAmountModal(Modal, title="Enter Bet Amount"):
     def __init__(self, parent_view, bet_type, bet_choice=None):
         super().__init__()
@@ -366,9 +489,7 @@ class BetAmountModal(Modal, title="Enter Bet Amount"):
         self.amount = TextInput(
             label="Bet Amount (PNG)",
             placeholder=f"Min: {MIN_BET_ROULETTE}, Max: {MAX_BET_ROULETTE}",
-            required=True,
-            min_length=1,
-            max_length=5
+            required=True
         )
         self.add_item(self.amount)
     
@@ -382,7 +503,6 @@ class BetAmountModal(Modal, title="Enter Bet Amount"):
         except ValueError:
             await interaction.response.send_message("Please enter a valid number!", ephemeral=True)
 
-# --- Multi-number button grid for complex bets ---
 class MultiNumberButtonView(View):
     def __init__(self, parent_view, bet_type, required_count):
         super().__init__(timeout=60)
@@ -391,20 +511,17 @@ class MultiNumberButtonView(View):
         self.required_count = required_count
         self.selected_numbers = []
 
-        # Add number buttons in rows
-        for row in range(0, 37, 6):  # 0-36
+        for row in range(0, 37, 6):
             for n in range(row, min(row + 6, 37)):
                 style = discord.ButtonStyle.danger if n in RED_NUMBERS else discord.ButtonStyle.secondary
                 btn = Button(label=str(n), style=style)
                 btn.callback = self.make_callback(str(n))
                 self.add_item(btn)
         
-        # Add 00 button
         btn_00 = Button(label="00", style=discord.ButtonStyle.secondary)
         btn_00.callback = self.make_callback("00")
         self.add_item(btn_00)
         
-        # Add confirm button
         confirm_btn = Button(label="✅ Confirm Bet", style=discord.ButtonStyle.success)
         confirm_btn.callback = self.confirm_bet
         self.add_item(confirm_btn)
@@ -416,7 +533,7 @@ class MultiNumberButtonView(View):
             else:
                 self.selected_numbers.append(number)
             await interaction.response.edit_message(
-                content=f"Selected numbers: {', '.join(self.selected_numbers)}\nNeed {self.required_count - len(self.selected_numbers)} more...",
+                content=f"Selected: {', '.join(self.selected_numbers)}\nNeed {self.required_count - len(self.selected_numbers)} more...",
                 view=self
             )
         return callback
@@ -425,20 +542,18 @@ class MultiNumberButtonView(View):
         if len(self.selected_numbers) != self.required_count:
             await interaction.response.send_message(f"Please select exactly {self.required_count} numbers!", ephemeral=True)
             return
-        
         modal = BetAmountModal(self.parent_view, self.bet_type, self.selected_numbers)
         await interaction.response.send_modal(modal)
 
-# --- Main Roulette View ---
 class RouletteView(View):
     def __init__(self, user_id):
-        super().__init__(timeout=300)  # 5 minute timeout
+        super().__init__(timeout=300)
         self.user_id = str(user_id)
 
     async def spin(self, interaction: discord.Interaction, bet_type=None, bet_choice=None, bet_amount=None):
         data, account = get_account(interaction.user.id)
 
-        if bet_type and bet_amount:  # Deduct balance
+        if bet_type and bet_amount:
             if account["balance"] < bet_amount:
                 await interaction.response.send_message("Not enough balance!", ephemeral=True)
                 return
@@ -451,10 +566,9 @@ class RouletteView(View):
 
         win = False
         payout = 0
-        outcome_text = "No bet placed. Round ended."
+        outcome_text = "No bet placed."
 
         if bet_type and bet_amount:
-            # Handle single number or multi-number bets
             if bet_type in ["single", "split", "street", "corner", "six_line"]:
                 if str(result) in bet_choice:
                     win = True
@@ -497,22 +611,19 @@ class RouletteView(View):
                 save_economy(data)
             else:
                 account["total_lost"] += bet_amount
-                save_economy(data)
                 outcome_text = f"💀 You lost {bet_amount} PNG."
+                save_economy(data)
 
-        # Update session inactivity counter
         if self.user_id in ACTIVE_SESSIONS:
             ACTIVE_SESSIONS[self.user_id]["inactive_rounds"] = 0
 
-        embed = discord.Embed(title="🎡 PNG Roulette Spin", color=discord.Color.random())
+        embed = discord.Embed(title="🎡 PNG Roulette", color=discord.Color.random())
         embed.add_field(name="Result", value=f"{result} ({color})")
         embed.add_field(name="Outcome", value=outcome_text)
-        embed.set_footer(text=f"Balance: {account['balance']} PNG | Bet again or leave the table.")
+        embed.set_footer(text=f"Balance: {account['balance']} PNG")
         
         await interaction.response.edit_message(embed=embed, view=self)
-        print(f"🎡 {interaction.user.name} played roulette. Bet: {bet_amount if bet_amount else 0} PNG, Result: {win}")  # Debug print
 
-    # --- Classic bet buttons ---
     @discord.ui.button(label="Red", style=discord.ButtonStyle.danger, row=0)
     async def red(self, interaction, button: Button):
         modal = BetAmountModal(self, "red_black", "red")
@@ -575,43 +686,36 @@ class RouletteView(View):
 
     @discord.ui.button(label="Single", style=discord.ButtonStyle.danger, row=3)
     async def single(self, interaction, button: Button):
-        await interaction.response.send_message("Select 1 number for Single:", ephemeral=True,
-                                                view=MultiNumberButtonView(self, "single", 1))
+        await interaction.response.send_message("Select 1 number:", ephemeral=True, view=MultiNumberButtonView(self, "single", 1))
 
     @discord.ui.button(label="Split", style=discord.ButtonStyle.secondary, row=3)
     async def split(self, interaction, button: Button):
-        await interaction.response.send_message("Select 2 numbers for Split:", ephemeral=True,
-                                                view=MultiNumberButtonView(self, "split", 2))
+        await interaction.response.send_message("Select 2 numbers:", ephemeral=True, view=MultiNumberButtonView(self, "split", 2))
 
     @discord.ui.button(label="Street", style=discord.ButtonStyle.secondary, row=3)
     async def street(self, interaction, button: Button):
-        await interaction.response.send_message("Select 3 numbers for Street:", ephemeral=True,
-                                                view=MultiNumberButtonView(self, "street", 3))
+        await interaction.response.send_message("Select 3 numbers:", ephemeral=True, view=MultiNumberButtonView(self, "street", 3))
 
     @discord.ui.button(label="Corner", style=discord.ButtonStyle.secondary, row=4)
     async def corner(self, interaction, button: Button):
-        await interaction.response.send_message("Select 4 numbers for Corner:", ephemeral=True,
-                                                view=MultiNumberButtonView(self, "corner", 4))
+        await interaction.response.send_message("Select 4 numbers:", ephemeral=True, view=MultiNumberButtonView(self, "corner", 4))
 
     @discord.ui.button(label="Six-line", style=discord.ButtonStyle.secondary, row=4)
     async def six_line(self, interaction, button: Button):
-        await interaction.response.send_message("Select 6 numbers for Six-line:", ephemeral=True,
-                                                view=MultiNumberButtonView(self, "six_line", 6))
+        await interaction.response.send_message("Select 6 numbers:", ephemeral=True, view=MultiNumberButtonView(self, "six_line", 6))
 
-    # Stay/Leave
     @discord.ui.button(label="Stay", style=discord.ButtonStyle.primary, row=4)
     async def stay(self, interaction, button: Button):
         if self.user_id in ACTIVE_SESSIONS:
             ACTIVE_SESSIONS[self.user_id]["inactive_rounds"] = 0
-        await interaction.response.send_message("👍 Staying at table. Next round auto-spins if no bet.", ephemeral=True)
+        await interaction.response.send_message("👍 Staying at table.", ephemeral=True)
 
     @discord.ui.button(label="Leave", style=discord.ButtonStyle.danger, row=4)
     async def leave(self, interaction, button: Button):
         ACTIVE_SESSIONS.pop(self.user_id, None)
-        await interaction.response.send_message("👋 You left the roulette table.", ephemeral=True)
+        await interaction.response.send_message("👋 Left the table.", ephemeral=True)
         self.stop()
 
-# --- Command ---
 @bot.tree.command(name="roulette", description="Join the roulette table!", guild=guild)
 async def roulette_cmd(interaction: discord.Interaction):
     user_id = str(interaction.user.id)
@@ -619,15 +723,12 @@ async def roulette_cmd(interaction: discord.Interaction):
         ACTIVE_SESSIONS[user_id] = {"inactive_rounds": 0}
     
     data, account = get_account(interaction.user.id)
-    embed = discord.Embed(title="🎡 PNG Roulette Table", color=discord.Color.green())
-    embed.add_field(name="Welcome to Roulette!", value="Click buttons to place bets!")
-    embed.add_field(name="Your Balance", value=f"{account['balance']} PNG", inline=False)
-    embed.add_field(name="Payouts", value="Single: 35x\nSplit: 17x\nStreet: 11x\nCorner: 8x\nSix-line: 5x\nColumn/Dozen: 2x\nRed/Black/Even/Odd/Low/High: 1x", inline=False)
+    embed = discord.Embed(title="🎡 PNG Roulette", color=discord.Color.green())
+    embed.add_field(name="Your Balance", value=f"{account['balance']} PNG")
+    embed.add_field(name="Payouts", value="Single: 35x\nSplit: 17x\nStreet: 11x\nCorner: 8x\nSix-line: 5x\nColumn/Dozen: 2x\nOthers: 1x", inline=False)
     
     await interaction.response.send_message(embed=embed, view=RouletteView(user_id))
-    print(f"🎡 {interaction.user.name} joined roulette table")  # Debug print
 
-# --- Auto-kick inactive players ---
 @tasks.loop(minutes=1)
 async def check_inactive_sessions():
     to_remove = []
@@ -637,15 +738,8 @@ async def check_inactive_sessions():
             to_remove.append(user_id)
     for user_id in to_remove:
         ACTIVE_SESSIONS.pop(user_id, None)
-        try:
-            user = await bot.fetch_user(int(user_id))
-            await user.send("You were removed from the roulette table due to inactivity.")
-            print(f"👋 Removed inactive user {user_id} from roulette")  # Debug print
-        except:
-            pass
 
-# ================= LEADERBOARD =================
-
+# ================= LEADERBOARD COINS =================
 @bot.tree.command(name="leaderboardcoins", description="Top richest players", guild=guild)
 async def leaderboardcoins(interaction: discord.Interaction):
     data = load_economy()
@@ -661,39 +755,28 @@ async def leaderboardcoins(interaction: discord.Interaction):
     )
 
     embed = discord.Embed(title="🏆 PNG Rich List", color=discord.Color.gold())
-
     for i, (user_id, info) in enumerate(sorted_users[:10], start=1):
-        embed.add_field(
-            name=f"{i}. <@{user_id}>",
-            value=f"{info['balance']} PNG",
-            inline=False
-        )
+        embed.add_field(name=f"{i}. <@{user_id}>", value=f"{info['balance']} PNG", inline=False)
 
     await interaction.response.send_message(embed=embed)
 
-# ================= END CASINO SYSTEM =================
-
-# ---------------- COMMANDS ----------------
-
+# ================= KILLS COMMANDS =================
 @bot.tree.command(name="ping", description="Check bot latency and hype!", guild=guild)
 async def ping(interaction: discord.Interaction):
-    latency_ms = round(bot.latency * 1000)  # convert to milliseconds
+    latency_ms = round(bot.latency * 1000)
     hype_messages = [
         "PNGGGG🗣️🗣️🔥🔥",
         "LET'S GO PNGGGG 🚀🗣️🔥",
         "PNGG MODE ACTIVATED 🏆💥🗣️",
         "KILLS TRACKED! PNGGGG 💯🔥🗣️"
     ]
-    import random
     hype = random.choice(hype_messages)
-
     await interaction.response.send_message(f"🏓 Pong! {latency_ms}ms\n{hype}")
     
 @bot.tree.command(name="help", description="Show bot commands and info", guild=guild)
 async def help_command(interaction: discord.Interaction):
     help_text = (
         "📜 **PNG Leaderboard & Casino Bot Commands** 📜\n\n"
-
         "🎯 **Leaderboard & Player Stats** 🎯\n"
         "🔹 `/addkills player:<name> regular:<num> team:<num> month:<YYYY-MM>` — Add kills (Authorized only)\n"
         "🔹 `/leaderboard month:<YYYY-MM>` — Show top players for a month\n"
@@ -701,7 +784,6 @@ async def help_command(interaction: discord.Interaction):
         "🔹 `/resetmonth month:<YYYY-MM>` — Reset all kills for a month (Authorized only)\n"
         "🔹 `/leaderboardcoins` — Top richest PNG players\n"
         "🔹 `/ping` — Check bot latency\n\n"
-
         "🎰 **Casino / PNG Economy** 🎰\n"
         "🔹 `/balance` — Check your PNG balance\n"
         "🔹 `/daily` — Claim daily PNG coins\n"
@@ -710,17 +792,14 @@ async def help_command(interaction: discord.Interaction):
         "🔹 `/dicevs opponent:<user> bet:<amount>` — Challenge another player to dice duel\n"
         "🔹 `/slots bet:<amount>` — Play PNG slots\n"
         "🔹 `/roulette` — Join the roulette table and place bets\n\n"
-
         "⚠️ **Notes** ⚠️\n"
         "- Economy uses your PNG balance.\n"
         "- Only authorized users can add or reset kills.\n"
         "- Current month defaults to server time if not specified.\n"
         "- Roulette inactive players are automatically removed after 3 rounds."
     )
-
     await interaction.response.send_message(help_text)
 
-# Add kills (backend only)
 @bot.tree.command(name="addkills", description="Add kills for a player (Authorized only)", guild=guild)
 @app_commands.describe(player="Player ID or name", regular="Regular kills", team="Team kills", month="Month YYYY-MM")
 async def addkills(interaction: discord.Interaction, player: str, regular: int = 0, team: int = 0, month: str = None):
@@ -737,7 +816,6 @@ async def addkills(interaction: discord.Interaction, player: str, regular: int =
     if player not in data[month_key]:
         data[month_key][player] = {"regular": 0, "team": 0}
 
-    # Team kills: divide total team kills by 2 before adding
     total_team = math.ceil(team / 2)
     data[month_key][player]["regular"] += regular
     data[month_key][player]["team"] += total_team
@@ -746,9 +824,7 @@ async def addkills(interaction: discord.Interaction, player: str, regular: int =
     await interaction.response.send_message(
         f"✅ Added **{regular} regular** and **{total_team} team** kills for **{player}** in **{month_key}**."
     )
-    print(f"📊 {interaction.user.name} added kills for {player}: {regular} reg, {team} team (halved to {total_team})")  # Debug print
 
-# Show leaderboard (anyone)
 @bot.tree.command(name="leaderboard", description="Show leaderboard for a month", guild=guild)
 @app_commands.describe(month="Month YYYY-MM")
 async def leaderboard(interaction: discord.Interaction, month: str = None):
@@ -772,7 +848,6 @@ async def leaderboard(interaction: discord.Interaction, month: str = None):
 
     await interaction.response.send_message(msg)
 
-# Show player stats (anyone)
 @bot.tree.command(name="player", description="Show a player's kills for a month", guild=guild)
 @app_commands.describe(player="Player ID or name", month="Month YYYY-MM")
 async def player(interaction: discord.Interaction, player: str, month: str = None):
@@ -790,7 +865,6 @@ async def player(interaction: discord.Interaction, player: str, month: str = Non
         f"Team kills (divided by 2): {stats.get('team',0)}\n**Total: {total} kills**"
     )
 
-# Reset a month (backend only)
 @bot.tree.command(name="resetmonth", description="Reset all kills for a month (Authorized only)", guild=guild)
 @app_commands.describe(month="Month YYYY-MM")
 async def resetmonth(interaction: discord.Interaction, month: str = None):
@@ -805,28 +879,51 @@ async def resetmonth(interaction: discord.Interaction, month: str = None):
         data[month_key] = {}
         save_data(data)
         await interaction.response.send_message(f"⚠️ Reset all data for {month_key}.")
-        print(f"⚠️ {interaction.user.name} reset month {month_key}")  # Debug print
     else:
         await interaction.response.send_message(f"No data found for {month_key}.")
 
+@bot.tree.command(name="storage", description="Check GitHub storage status (Authorized only)", guild=guild)
+async def storage_status(interaction: discord.Interaction):
+    if not is_authorized(interaction.user.id):
+        await interaction.response.send_message("❌ Not authorized", ephemeral=True)
+        return
+    
+    status = f"**Storage Mode:** {'GitHub' if storage.is_production and storage.token else 'Local'}\n"
+    if storage.is_production and storage.token:
+        status += f"**Repo:** {storage.repo}\n"
+        status += f"**Auto-save:** {'Running' if storage.auto_save.is_running() else 'Stopped'}\n"
+        status += f"**Pending Saves:** {storage.pending_saves}\n"
+        
+        econ = storage.get_economy()
+        lb = storage.get_leaderboard()
+        status += f"**Economy Accounts:** {len(econ.get('users', {}))}\n"
+        status += f"**Leaderboard Months:** {len(lb)}\n"
+    
+    await interaction.response.send_message(status, ephemeral=True)
 
+# ================= FLASK KEEP-ALIVE =================
 app = Flask("")
 
 @app.route("/")
 def home():
-    return "PNG Leaderboard Bot is alive!"
+    return f"PNG Bot is alive! Mode: {'GitHub' if storage.is_production and storage.token else 'Local'}"
 
 def run_flask():
-    port = int(os.environ.get("PORT", 3000))  # Render sets PORT automatically
+    port = int(os.environ.get("PORT", 3000))
     app.run(host="0.0.0.0", port=port)
 
-# Start Flask server in a separate thread so bot can run simultaneously
-threading.Thread(target=run_flask).start()
+threading.Thread(target=run_flask, daemon=True).start()
 
-# ---------------- RUN BOT ----------------
+# ================= RUN BOT =================
 if __name__ == "__main__":
-    print(f"🚀 Starting bot with data files:")
-    print(f"   📊 Leaderboard: {DATA_FILE}")
-    print(f"   💰 Economy: {ECON_FILE}")
+    print("="*50)
+    print("🚀 PNG BOT STARTING UP")
+    print(f"📁 Base directory: {BASE_DIR}")
+    print(f"🔧 Mode: {'GitHub (Production)' if storage.is_production and storage.token else 'Local (Development)'}")
+    if storage.is_production and storage.token:
+        print(f"📦 GitHub Repo: {storage.repo}")
+        print(f"🔑 GitHub Token: {'✅ Loaded' if storage.token else '❌ Missing'}")
+    print("="*50)
+    
+    # Start the bot
     bot.run(TOKEN)
-
