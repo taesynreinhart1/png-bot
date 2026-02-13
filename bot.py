@@ -35,50 +35,44 @@ class GitHubStorage:
         
         if self.is_production and self.token:
             self.load_all()
+            self.ensure_files_exist()  # ADD THIS LINE
     
-    def load_from_github(self, path):
-        url = f"https://api.github.com/repos/{self.repo}/contents/{path}?ref={self.branch}"
-        headers = {"Authorization": f"token {self.token}", "Accept": "application/vnd.github.v3+json"}
+    def ensure_files_exist(self):
+        """Create economy.json and leaderboard.json on GitHub if they don't exist"""
+        if not self.is_production or not self.token:
+            return
         
-        try:
-            response = requests.get(url, headers=headers)
-            if response.status_code == 200:
-                content = response.json()
-                decoded = base64.b64decode(content['content']).decode('utf-8')
-                return json.loads(decoded), content['sha']
-            else:
-                print(f"⚠️ GitHub file not found: {path}")
-                return None, None
-        except Exception as e:
-            print(f"❌ Error loading from GitHub: {e}")
-            return None, None
+        print("📝 Checking if GitHub files exist...")
+        
+        # Check/create economy.json
+        econ_data, econ_sha = self.load_from_github("economy.json")
+        if econ_data is None:
+            print("📝 Creating economy.json on GitHub...")
+            initial_econ = {"users": {}}
+            success = self.save_to_github("economy.json", initial_econ, None)
+            if success:
+                print("✅ Created economy.json")
+                # Reload to get the SHA
+                _, self.economy_sha = self.load_from_github("economy.json")
+                self.economy_cache = initial_econ
+        else:
+            print("✅ economy.json already exists")
+        
+        # Check/create leaderboard.json
+        lb_data, lb_sha = self.load_from_github("leaderboard.json")
+        if lb_data is None:
+            print("📝 Creating leaderboard.json on GitHub...")
+            initial_lb = {}
+            success = self.save_to_github("leaderboard.json", initial_lb, None)
+            if success:
+                print("✅ Created leaderboard.json")
+                # Reload to get the SHA
+                _, self.leaderboard_sha = self.load_from_github("leaderboard.json")
+                self.leaderboard_cache = initial_lb
+        else:
+            print("✅ leaderboard.json already exists")
     
-    def save_to_github(self, path, data, sha=None):
-        url = f"https://api.github.com/repos/{self.repo}/contents/{path}"
-        headers = {"Authorization": f"token {self.token}", "Accept": "application/vnd.github.v3+json"}
-        
-        content = json.dumps(data, indent=4)
-        encoded = base64.b64encode(content.encode('utf-8')).decode('utf-8')
-        
-        payload = {
-            "message": f"Update {path} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            "content": encoded,
-            "branch": self.branch
-        }
-        if sha:
-            payload["sha"] = sha
-        
-        try:
-            response = requests.put(url, headers=headers, json=payload)
-            if response.status_code in [200, 201]:
-                print(f"✅ Saved to GitHub: {path}")
-                return True
-            else:
-                print(f"❌ GitHub save failed: {response.status_code}")
-                return False
-        except Exception as e:
-            print(f"❌ Error saving to GitHub: {e}")
-            return False
+    # ... rest of your methods remain exactly the same ...
     
     def load_all(self):
         if not self.is_production or not self.token:
