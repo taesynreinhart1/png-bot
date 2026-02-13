@@ -11,6 +11,12 @@
             "total_won": 0,
             "total_lost": 0,
             "last_daily": 1770978923
+        },
+        "1445847509598732408": {
+            "balance": 700,
+            "total_won": 0,
+            "total_lost": 0,
+            "last_daily": 1770980364
         }
     }
 }
