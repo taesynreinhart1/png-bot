@@ -35,7 +35,53 @@ class GitHubStorage:
         
         if self.is_production and self.token:
             self.load_all()
-            self.ensure_files_exist()  # ADD THIS LINE
+            self.ensure_files_exist()
+    
+    def load_from_github(self, path):
+        """Load JSON directly from GitHub repo"""
+        url = f"https://api.github.com/repos/{self.repo}/contents/{path}?ref={self.branch}"
+        headers = {"Authorization": f"token {self.token}", "Accept": "application/vnd.github.v3+json"}
+        
+        try:
+            response = requests.get(url, headers=headers)
+            if response.status_code == 200:
+                content = response.json()
+                decoded = base64.b64decode(content['content']).decode('utf-8')
+                return json.loads(decoded), content['sha']
+            else:
+                print(f"⚠️ GitHub file not found: {path}")
+                return None, None
+        except Exception as e:
+            print(f"❌ Error loading from GitHub: {e}")
+            return None, None
+    
+    def save_to_github(self, path, data, sha=None):
+        """Save JSON directly to GitHub repo"""
+        url = f"https://api.github.com/repos/{self.repo}/contents/{path}"
+        headers = {"Authorization": f"token {self.token}", "Accept": "application/vnd.github.v3+json"}
+        
+        content = json.dumps(data, indent=4)
+        encoded = base64.b64encode(content.encode('utf-8')).decode('utf-8')
+        
+        payload = {
+            "message": f"Update {path} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "content": encoded,
+            "branch": self.branch
+        }
+        if sha:
+            payload["sha"] = sha
+        
+        try:
+            response = requests.put(url, headers=headers, json=payload)
+            if response.status_code in [200, 201]:
+                print(f"✅ Saved to GitHub: {path}")
+                return True
+            else:
+                print(f"❌ GitHub save failed: {response.status_code}")
+                return False
+        except Exception as e:
+            print(f"❌ Error saving to GitHub: {e}")
+            return False
     
     def ensure_files_exist(self):
         """Create economy.json and leaderboard.json on GitHub if they don't exist"""
@@ -52,11 +98,12 @@ class GitHubStorage:
             success = self.save_to_github("economy.json", initial_econ, None)
             if success:
                 print("✅ Created economy.json")
-                # Reload to get the SHA
                 _, self.economy_sha = self.load_from_github("economy.json")
                 self.economy_cache = initial_econ
         else:
             print("✅ economy.json already exists")
+            self.economy_cache = econ_data
+            self.economy_sha = econ_sha
         
         # Check/create leaderboard.json
         lb_data, lb_sha = self.load_from_github("leaderboard.json")
@@ -66,15 +113,15 @@ class GitHubStorage:
             success = self.save_to_github("leaderboard.json", initial_lb, None)
             if success:
                 print("✅ Created leaderboard.json")
-                # Reload to get the SHA
                 _, self.leaderboard_sha = self.load_from_github("leaderboard.json")
                 self.leaderboard_cache = initial_lb
         else:
             print("✅ leaderboard.json already exists")
-    
-    # ... rest of your methods remain exactly the same ...
+            self.leaderboard_cache = lb_data
+            self.leaderboard_sha = lb_sha
     
     def load_all(self):
+        """Load both economy and leaderboard data from GitHub"""
         if not self.is_production or not self.token:
             return
         
@@ -82,15 +129,11 @@ class GitHubStorage:
         if econ_data:
             self.economy_cache = econ_data
             print(f"💰 Loaded economy data: {len(econ_data.get('users', {}))} accounts")
-        else:
-            self.economy_cache = {"users": {}}
         
         lb_data, self.leaderboard_sha = self.load_from_github("leaderboard.json")
         if lb_data:
             self.leaderboard_cache = lb_data
             print(f"📊 Loaded leaderboard data: {len(lb_data)} months")
-        else:
-            self.leaderboard_cache = {}
     
     def get_economy(self):
         if self.is_production and self.token:
