@@ -441,66 +441,6 @@ class BlackjackGame:
         elif score == 21:
             return f"🎯 **{score}**"
         return f"**{score}**"
-    
-    def create_embed(self, interaction, account):
-        """Create the game embed"""
-        if self.game_over:
-            if self.payout > self.bet_amount:
-                title = "🎰 **BLACKJACK - YOU WIN!** 🎰"
-                color = discord.Color.gold()
-            elif self.payout == self.bet_amount:
-                title = "🎰 **BLACKJACK - PUSH** 🎰"
-                color = discord.Color.blue()
-            else:
-                title = "🎰 **BLACKJACK - YOU LOST** 🎰"
-                color = discord.Color.red()
-        else:
-            title = "🎰 **BLACKJACK - IN PROGRESS** 🎰"
-            color = discord.Color.green()
-        
-        embed = discord.Embed(title=title, color=color)
-        
-        # Player info
-        embed.add_field(name="👤 Player", value=interaction.user.mention, inline=True)
-        embed.add_field(name="💰 Bet", value=f"{self.bet_amount} PNG", inline=True)
-        embed.add_field(name="💎 Balance", value=f"{account['balance']} PNG", inline=True)
-        
-        # Player hand
-        player_display = self.format_hand(self.player_hand)
-        player_score_text = self.get_score_display(self.player_score, self.player_score > 21)
-        if self.blackjack and not self.game_over:
-            hand_title = f"🃏 **YOUR HAND** {player_score_text} 🎉 **BLACKJACK!**"
-        else:
-            hand_title = f"🃏 **YOUR HAND** {player_score_text}"
-        embed.add_field(name=hand_title, value=f"```\n{player_display}\n```", inline=False)
-        
-        # Dealer hand
-        hide = not self.game_over
-        dealer_display = self.format_hand(self.dealer_hand, hide_first=hide)
-        if hide:
-            visible_score = self.calculate_score([self.dealer_hand[0]])
-            dealer_score_text = f"**{visible_score}** + ?"
-        else:
-            dealer_score_text = self.get_score_display(self.dealer_score, self.dealer_score > 21)
-        embed.add_field(name=f"🤵 **DEALER** {dealer_score_text}", value=f"```\n{dealer_display}\n```", inline=False)
-        
-        # Result if game over
-        if self.game_over:
-            if self.result == "bust":
-                result_text = f"💥 **BUST!** Lost {self.bet_amount} PNG"
-            elif self.result == "dealer_bust":
-                profit = self.payout - self.bet_amount
-                result_text = f"🎉 **DEALER BUST!** +{profit} PNG!"
-            elif self.result == "win":
-                profit = self.payout - self.bet_amount
-                result_text = f"🎉 **YOU WIN!** +{profit} PNG!"
-            elif self.result == "loss":
-                result_text = f"💀 **DEALER WINS!** Lost {self.bet_amount} PNG"
-            elif self.result == "push":
-                result_text = f"🤝 **PUSH!** Bet returned: {self.bet_amount} PNG"
-            embed.add_field(name="📊 **RESULT**", value=result_text, inline=False)
-        
-        return embed
 
 class BlackjackBetModal(Modal, title="💰 Place Your Blackjack Bet"):
     def __init__(self):
@@ -513,12 +453,10 @@ class BlackjackBetModal(Modal, title="💰 Place Your Blackjack Bet"):
         self.add_item(self.bet)
     
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        
         try:
             bet_amount = int(self.bet.value)
             if bet_amount < BLACKJACK_MIN_BET or bet_amount > BLACKJACK_MAX_BET:
-                await interaction.followup.send(
+                await interaction.response.send_message(
                     f"❌ Bet must be between {BLACKJACK_MIN_BET} and {BLACKJACK_MAX_BET} PNG!",
                     ephemeral=True
                 )
@@ -527,7 +465,7 @@ class BlackjackBetModal(Modal, title="💰 Place Your Blackjack Bet"):
             # Check balance
             data, account = get_account(interaction.user.id)
             if account["balance"] < bet_amount:
-                await interaction.followup.send(
+                await interaction.response.send_message(
                     f"❌ You only have {account['balance']} PNG!",
                     ephemeral=True
                 )
@@ -544,36 +482,147 @@ class BlackjackBetModal(Modal, title="💰 Place Your Blackjack Bet"):
             # Store game
             ACTIVE_BLACKJACK_GAMES[str(interaction.user.id)] = game
             
-            # Create embed and view
-            embed = game.create_embed(interaction, account)
-            view = BlackjackView(game)
+            # Create embed
+            embed = discord.Embed(
+                title="🎰 **BLACKJACK - IN PROGRESS** 🎰",
+                color=discord.Color.green()
+            )
             
-            # Send message
-            await interaction.followup.send(embed=embed, view=view)
+            # Player info
+            embed.add_field(name="👤 Player", value=interaction.user.mention, inline=True)
+            embed.add_field(name="💰 Bet", value=f"{bet_amount} PNG", inline=True)
+            embed.add_field(name="💎 Balance", value=f"{account['balance']} PNG", inline=True)
+            
+            # Player hand
+            player_display = game.format_hand(game.player_hand)
+            player_score_text = game.get_score_display(game.player_score)
+            if game.blackjack:
+                hand_title = f"🃏 **YOUR HAND** {player_score_text} 🎉 **BLACKJACK!**"
+            else:
+                hand_title = f"🃏 **YOUR HAND** {player_score_text}"
+            embed.add_field(name=hand_title, value=f"```\n{player_display}\n```", inline=False)
+            
+            # Dealer hand (hidden)
+            dealer_display = game.format_hand(game.dealer_hand, hide_first=True)
+            visible_score = game.calculate_score([game.dealer_hand[0]])
+            embed.add_field(
+                name=f"🤵 **DEALER** **{visible_score}** + ?",
+                value=f"```\n{dealer_display}\n```",
+                inline=False
+            )
+            
+            # Create view with buttons
+            view = BlackjackGameView(game)
+            
+            # Send message and store it
+            await interaction.response.send_message(embed=embed, view=view)
             game.message = await interaction.original_response()
             
         except ValueError:
-            await interaction.followup.send("❌ Enter a valid number!", ephemeral=True)
+            await interaction.response.send_message("❌ Enter a valid number!", ephemeral=True)
 
-class BlackjackView(View):
+class BlackjackGameView(View):
     def __init__(self, game):
         super().__init__(timeout=120)
         self.game = game
     
-    async def update_game(self, interaction, account):
+    async def update_message(self, interaction):
         """Update the game message"""
-        embed = self.game.create_embed(interaction, account)
+        data, account = get_account(int(self.game.player_id))
         
         if self.game.game_over:
-            await interaction.response.edit_message(embed=embed, view=None)
-            ACTIVE_BLACKJACK_GAMES.pop(self.game.player_id, None)
+            # Game over - determine title and color
+            if self.game.payout > self.game.bet_amount:
+                title = "🎰 **BLACKJACK - YOU WIN!** 🎰"
+                color = discord.Color.gold()
+            elif self.game.payout == self.game.bet_amount:
+                title = "🎰 **BLACKJACK - PUSH** 🎰"
+                color = discord.Color.blue()
+            else:
+                title = "🎰 **BLACKJACK - YOU LOST** 🎰"
+                color = discord.Color.red()
             
-            # Add winnings
+            embed = discord.Embed(title=title, color=color)
+            
+            # Add winnings to balance
             if self.game.payout > 0:
-                data, account = get_account(int(self.game.player_id))
                 account["balance"] += self.game.payout
                 save_economy(data)
+            
+            # Player info
+            embed.add_field(name="👤 Player", value=interaction.user.mention, inline=True)
+            embed.add_field(name="💰 Bet", value=f"{self.game.bet_amount} PNG", inline=True)
+            embed.add_field(name="💎 Balance", value=f"{account['balance']} PNG", inline=True)
+            
+            # Player hand
+            player_display = self.game.format_hand(self.game.player_hand)
+            player_score_text = self.game.get_score_display(self.game.player_score, self.game.player_score > 21)
+            embed.add_field(
+                name=f"🃏 **YOUR HAND** {player_score_text}",
+                value=f"```\n{player_display}\n```",
+                inline=False
+            )
+            
+            # Dealer hand (revealed)
+            dealer_display = self.game.format_hand(self.game.dealer_hand)
+            dealer_score_text = self.game.get_score_display(self.game.dealer_score, self.game.dealer_score > 21)
+            embed.add_field(
+                name=f"🤵 **DEALER** {dealer_score_text}",
+                value=f"```\n{dealer_display}\n```",
+                inline=False
+            )
+            
+            # Result
+            if self.game.result == "bust":
+                result_text = f"💥 **BUST!** Lost {self.game.bet_amount} PNG"
+            elif self.game.result == "dealer_bust":
+                profit = self.game.payout - self.game.bet_amount
+                result_text = f"🎉 **DEALER BUST!** +{profit} PNG!"
+            elif self.game.result == "win":
+                profit = self.game.payout - self.game.bet_amount
+                result_text = f"🎉 **YOU WIN!** +{profit} PNG!"
+            elif self.game.result == "loss":
+                result_text = f"💀 **DEALER WINS!** Lost {self.game.bet_amount} PNG"
+            elif self.game.result == "push":
+                result_text = f"🤝 **PUSH!** Bet returned: {self.game.bet_amount} PNG"
+            embed.add_field(name="📊 **RESULT**", value=result_text, inline=False)
+            
+            # Remove from active games
+            ACTIVE_BLACKJACK_GAMES.pop(self.game.player_id, None)
+            
+            # Edit message with no buttons
+            await interaction.response.edit_message(embed=embed, view=None)
+            
         else:
+            # Game ongoing - update embed
+            embed = discord.Embed(
+                title="🎰 **BLACKJACK - IN PROGRESS** 🎰",
+                color=discord.Color.green()
+            )
+            
+            embed.add_field(name="👤 Player", value=interaction.user.mention, inline=True)
+            embed.add_field(name="💰 Bet", value=f"{self.game.bet_amount} PNG", inline=True)
+            embed.add_field(name="💎 Balance", value=f"{account['balance']} PNG", inline=True)
+            
+            # Player hand
+            player_display = self.game.format_hand(self.game.player_hand)
+            player_score_text = self.game.get_score_display(self.game.player_score)
+            embed.add_field(
+                name=f"🃏 **YOUR HAND** {player_score_text}",
+                value=f"```\n{player_display}\n```",
+                inline=False
+            )
+            
+            # Dealer hand (hidden)
+            dealer_display = self.game.format_hand(self.game.dealer_hand, hide_first=True)
+            visible_score = self.game.calculate_score([self.game.dealer_hand[0]])
+            embed.add_field(
+                name=f"🤵 **DEALER** **{visible_score}** + ?",
+                value=f"```\n{dealer_display}\n```",
+                inline=False
+            )
+            
+            # Edit message with same view
             await interaction.response.edit_message(embed=embed, view=self)
     
     @discord.ui.button(label="🎯 HIT", style=discord.ButtonStyle.primary, emoji="🃏", row=0)
@@ -582,15 +631,12 @@ class BlackjackView(View):
             await interaction.response.send_message("❌ This isn't your game!", ephemeral=True)
             return
         
-        await interaction.response.defer()
-        
         if self.game.game_over:
-            await interaction.followup.send("❌ Game is already over!", ephemeral=True)
+            await interaction.response.send_message("❌ Game is already over!", ephemeral=True)
             return
         
         self.game.hit()
-        data, account = get_account(interaction.user.id)
-        await self.update_game(interaction, account)
+        await self.update_message(interaction)
     
     @discord.ui.button(label="🛑 STAND", style=discord.ButtonStyle.secondary, emoji="✋", row=0)
     async def stand_button(self, interaction: discord.Interaction, button: Button):
@@ -598,15 +644,12 @@ class BlackjackView(View):
             await interaction.response.send_message("❌ This isn't your game!", ephemeral=True)
             return
         
-        await interaction.response.defer()
-        
         if self.game.game_over:
-            await interaction.followup.send("❌ Game is already over!", ephemeral=True)
+            await interaction.response.send_message("❌ Game is already over!", ephemeral=True)
             return
         
         self.game.stand()
-        data, account = get_account(interaction.user.id)
-        await self.update_game(interaction, account)
+        await self.update_message(interaction)
     
     @discord.ui.button(label="🏃 FORFEIT", style=discord.ButtonStyle.danger, emoji="❌", row=0)
     async def forfeit_button(self, interaction: discord.Interaction, button: Button):
@@ -614,18 +657,23 @@ class BlackjackView(View):
             await interaction.response.send_message("❌ This isn't your game!", ephemeral=True)
             return
         
-        await interaction.response.defer()
-        
         self.game.game_over = True
         self.game.result = "forfeit"
         self.game.payout = 0
         
         data, account = get_account(interaction.user.id)
-        embed = self.game.create_embed(interaction, account)
-        await interaction.followup.edit_message(embed=embed, view=None)
+        
+        embed = discord.Embed(
+            title="🎰 **BLACKJACK - FORFEITED** 🎰",
+            color=discord.Color.red()
+        )
+        embed.add_field(name="👤 Player", value=interaction.user.mention, inline=True)
+        embed.add_field(name="💰 Bet", value=f"{self.game.bet_amount} PNG", inline=True)
+        embed.add_field(name="💎 Balance", value=f"{account['balance']} PNG", inline=True)
+        embed.add_field(name="📊 **RESULT**", value="🏃 You forfeited the game.", inline=False)
         
         ACTIVE_BLACKJACK_GAMES.pop(self.game.player_id, None)
-        await interaction.followup.send("🏃 You forfeited the game.", ephemeral=True)
+        await interaction.response.edit_message(embed=embed, view=None)
 
 class BlackjackStartView(View):
     def __init__(self):
@@ -655,8 +703,6 @@ async def blackjack(interaction: discord.Interaction):
     
     data, account = get_account(interaction.user.id)
     
-    # Create a temporary game just for the embed
-    temp_game = BlackjackGame(interaction.user.id, 0)
     embed = discord.Embed(
         title="🎰 **BLACKJACK** 🎰",
         color=discord.Color.blue(),
@@ -664,7 +710,11 @@ async def blackjack(interaction: discord.Interaction):
     )
     embed.add_field(name="👤 Player", value=interaction.user.mention, inline=True)
     embed.add_field(name="💰 Balance", value=f"{account['balance']} PNG", inline=True)
-    embed.add_field(name="📋 Rules", value="• Get as close to 21 as possible\n• Dealer stands on 17\n• Blackjack pays 3:2", inline=False)
+    embed.add_field(
+        name="📋 Rules", 
+        value="• Get as close to 21 as possible\n• Dealer stands on 17\n• Blackjack pays 3:2\n• Aces count as 1 or 11",
+        inline=False
+    )
     
     view = BlackjackStartView()
     await interaction.followup.send(embed=embed, view=view)
