@@ -27,6 +27,10 @@
         "AlexPopcorn": {
             "regular": 278,
             "team": 0
+        },
+        "FueGo": {
+            "regular": 64,
+            "team": 0
         }
     }
 }
