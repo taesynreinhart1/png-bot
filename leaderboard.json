@@ -19,6 +19,10 @@
         "Eliminatxr": {
             "regular": 178,
             "team": 0
+        },
+        "Slasher": {
+            "regular": 75,
+            "team": 0
         }
     }
 }
